@@ -1,209 +1,83 @@
 import React, { useState } from 'react';
-import { useTradingTerminal } from './hooks/useTradingTerminal';
-import { ProHeader } from './components/ProHeader';
-import { ProTradingChart } from './components/ProTradingChart';
-import { ClobOrderBook } from './components/ClobOrderBook';
-import { LiveTradesTicker } from './components/LiveTradesTicker';
-import { TwapAnalyticsCard } from './components/TwapAnalyticsCard';
-import { getPolymarketSlug } from './services/polymarketFeed';
-import { BarChart2, BookOpen, Activity, ShieldCheck } from 'lucide-react';
+import { WeatherMarketProvider, useWeatherMarket } from './context/WeatherMarketContext';
+import { TopStatusBar } from './components/layout/TopStatusBar';
+import { DesktopSidebar, type NavTabId } from './components/layout/DesktopSidebar';
+import { MobileNavBar } from './components/layout/MobileNavBar';
+import { LiveCommandView } from './components/views/LiveCommandView';
+import { PreMarketIntelView } from './components/views/PreMarketIntelView';
+import { CityDeepDiveView } from './components/views/CityDeepDiveView';
+import { AgentConfigLogsView } from './components/views/AgentConfigLogsView';
+import { QuickOrderTicket } from './components/widgets/QuickOrderTicket';
+import { SettlementModal } from './components/widgets/SettlementModal';
+import type { QuantitativeEdge } from './types/weatherMarket';
 
-export function App() {
+const AppContent: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<NavTabId>('live-command');
+  const [stagedEdge, setStagedEdge] = useState<QuantitativeEdge | null>(null);
+
   const {
-    asset,
-    setAsset,
-    timeframe,
-    setTimeframe,
-    chartMode,
-    setChartMode,
-    chartStyle,
-    setChartStyle,
-    theme,
-    toggleTheme,
-    showPrediction,
-    setShowPrediction,
-    predictedPrice,
-    spotPrice,
-    priceDirection,
-    upPrice,
-    downPrice,
-    currentWindowTs,
-    settlement,
-    activeCandles,
-    twapLineData,
-    orderBook,
-    trades,
-    latencyStats,
-    activeEvent,
-    activeMarket,
-  } = useTradingTerminal();
-
-  // Mobile navigation tab state
-  const [mobileTab, setMobileTab] = useState<'chart' | 'book' | 'trades' | 'twap'>('chart');
-
-  const slug = getPolymarketSlug(asset, currentWindowTs);
-  const activeLastPrice = chartMode === 'SPOT' ? spotPrice : upPrice;
-  const isDark = theme === 'dark';
+    executeTrade,
+    portfolio,
+    activeSettlementNotice,
+    dismissSettlementNotice,
+    settledHistory
+  } = useWeatherMarket();
 
   return (
-    <div
-      className={`min-h-screen lg:h-screen lg:max-h-screen lg:overflow-hidden flex flex-col font-sans selection:bg-[#f0b90b] selection:text-black transition-colors ${
-        isDark ? 'bg-[#0e1118] text-[#d1d4dc]' : 'bg-[#f4f6f9] text-[#191b22]'
-      }`}
-    >
-      {/* Top Pro Sticky Header */}
-      <ProHeader
-        asset={asset}
-        setAsset={setAsset}
-        spotPrice={spotPrice}
-        priceDirection={priceDirection}
-        settlement={settlement}
-        latencyStats={latencyStats}
-        upPrice={upPrice}
-        downPrice={downPrice}
-        theme={theme}
-        toggleTheme={toggleTheme}
-        showPrediction={showPrediction}
-        setShowPrediction={setShowPrediction}
-      />
+    <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+      {/* Top Telemetry & Status Bar */}
+      <TopStatusBar />
 
-      {/* Main Terminal Area (100% Fit in Single PC Viewport without Scrolling) */}
-      <main className="flex-1 min-h-0 p-2 max-w-[1920px] w-full mx-auto flex flex-col lg:overflow-hidden">
-        
-        {/* Mobile Tab Switcher (Visible only on mobile/tablet) */}
-        <div
-          className={`lg:hidden flex items-center p-1 rounded-xl border text-xs font-mono select-none mb-2 ${
-            isDark ? 'bg-[#131722] border-[#2a2e39]' : 'bg-white border-[#dbe0e7] shadow-sm'
-          }`}
-        >
-          <button
-            onClick={() => setMobileTab('chart')}
-            className={`flex-1 py-1.5 rounded-lg flex items-center justify-center space-x-1 font-bold transition-all ${
-              mobileTab === 'chart'
-                ? 'bg-[#f0b90b] text-black shadow font-black'
-                : isDark
-                ? 'text-[#787b86]'
-                : 'text-slate-600'
-            }`}
-          >
-            <BarChart2 className="w-3.5 h-3.5" />
-            <span>CHART</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('book')}
-            className={`flex-1 py-1.5 rounded-lg flex items-center justify-center space-x-1 font-bold transition-all ${
-              mobileTab === 'book'
-                ? 'bg-[#f0b90b] text-black shadow font-black'
-                : isDark
-                ? 'text-[#787b86]'
-                : 'text-slate-600'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>BOOK</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('trades')}
-            className={`flex-1 py-1.5 rounded-lg flex items-center justify-center space-x-1 font-bold transition-all ${
-              mobileTab === 'trades'
-                ? 'bg-[#f0b90b] text-black shadow font-black'
-                : isDark
-                ? 'text-[#787b86]'
-                : 'text-slate-600'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>TRADES</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('twap')}
-            className={`flex-1 py-1.5 rounded-lg flex items-center justify-center space-x-1 font-bold transition-all ${
-              mobileTab === 'twap'
-                ? 'bg-[#f0b90b] text-black shadow font-black'
-                : isDark
-                ? 'text-[#787b86]'
-                : 'text-slate-600'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>TWAP</span>
-          </button>
-        </div>
+      {/* Mobile Horizontal City Navigation Strip */}
+      <MobileNavBar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-        {/* Dual Layout Grid (Desktop vs Mobile) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 flex-1 min-h-0">
-          
-          {/* LEFT / PRIMARY: TradingView Chart with Integrated Top UP/DOWN HUD */}
-          <section className={`lg:col-span-8 xl:col-span-9 flex flex-col h-full min-h-0 ${
-            mobileTab === 'chart' ? 'flex' : 'hidden lg:flex'
-          }`}>
-            <div className="flex-1 min-h-0 h-full w-full flex flex-col">
-              <ProTradingChart
-                data={activeCandles}
-                twapData={twapLineData}
-                timeframe={timeframe}
-                setTimeframe={setTimeframe}
-                chartMode={chartMode}
-                setChartMode={setChartMode}
-                chartStyle={chartStyle}
-                setChartStyle={setChartStyle}
-                theme={theme}
-                lastPrice={activeLastPrice}
-                strikePrice={settlement.strikePrice}
-                runningTwap={settlement.runningTwap}
-                showPrediction={showPrediction}
-                setShowPrediction={setShowPrediction}
-                predictedPrice={predictedPrice}
-                assetName={asset}
-                upPrice={upPrice}
-                downPrice={downPrice}
-                settlement={settlement}
-              />
-            </div>
-          </section>
+      {/* Main App Grid: Desktop Sidebar + View Container */}
+      <div className="flex-1 flex flex-row overflow-hidden">
+        {/* Desktop Persistent Sidebar */}
+        <DesktopSidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-          {/* RIGHT / SECONDARY: Order Book + Live Trades + TWAP Analytics */}
-          <section className={`lg:col-span-4 xl:col-span-3 flex flex-col h-full min-h-0 space-y-2 ${
-            mobileTab !== 'chart' ? 'flex' : 'hidden lg:flex'
-          }`}>
-            {/* Mobile View */}
-            <div className="lg:hidden flex-1 flex flex-col space-y-2">
-              {mobileTab === 'book' && <div className="h-[480px]"><ClobOrderBook orderBook={orderBook} theme={theme} /></div>}
-              {mobileTab === 'trades' && <div className="h-[480px]"><LiveTradesTicker trades={trades} theme={theme} /></div>}
-              {mobileTab === 'twap' && (
-                <TwapAnalyticsCard
-                  settlement={settlement}
-                  eventData={activeEvent}
-                  activeMarket={activeMarket}
-                  slug={slug}
-                  theme={theme}
-                />
-              )}
-            </div>
+        {/* View Port Area */}
+        <main className="flex-1 overflow-y-auto p-3 sm:p-5 max-w-[1920px] mx-auto w-full">
+          {activeTab === 'live-command' && (
+            <LiveCommandView onOpenOrderTicket={(edge) => setStagedEdge(edge)} />
+          )}
 
-            {/* Desktop Structured View (Zero Scroll, Exact Fit) */}
-            <div className="hidden lg:flex flex-col h-full min-h-0 space-y-2">
-              {/* Chainlink TWAP Settlement Card */}
-              <TwapAnalyticsCard
-                settlement={settlement}
-                eventData={activeEvent}
-                activeMarket={activeMarket}
-                slug={slug}
-                theme={theme}
-              />
+          {activeTab === 'pre-market-intel' && (
+            <PreMarketIntelView onStageTrade={(edge) => setStagedEdge(edge)} />
+          )}
 
-              {/* Order Book & Live Trades Split View */}
-              <div className="flex-1 min-h-0 grid grid-rows-2 gap-2">
-                <ClobOrderBook orderBook={orderBook} theme={theme} />
-                <LiveTradesTicker trades={trades} theme={theme} />
-              </div>
-            </div>
-          </section>
+          {activeTab === 'city-deep-dive' && <CityDeepDiveView />}
 
-        </div>
-      </main>
+          {activeTab === 'agent-config' && <AgentConfigLogsView />}
+        </main>
+      </div>
+
+      {/* Institutional Quick Order Ticket Modal */}
+      {stagedEdge && (
+        <QuickOrderTicket
+          initialEdge={stagedEdge}
+          onClose={() => setStagedEdge(null)}
+          onExecute={executeTrade}
+          cashBalance={portfolio.cashBalance}
+        />
+      )}
+
+      {/* Hourly Period Settlement Breakdown Modal */}
+      {activeSettlementNotice && (
+        <SettlementModal
+          resolution={activeSettlementNotice}
+          settledContracts={settledHistory}
+          onClose={dismissSettlementNotice}
+        />
+      )}
     </div>
   );
-}
+};
 
-export default App;
+export default function App() {
+  return (
+    <WeatherMarketProvider>
+      <AppContent />
+    </WeatherMarketProvider>
+  );
+}

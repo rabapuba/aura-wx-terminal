@@ -2,11 +2,11 @@
 
 @layer base {
   :root {
-    --color-bg-primary: #080b11;
-    --color-bg-secondary: #0e131f;
-    --color-bg-tertiary: #141b2b;
-    --color-border: #1c2538;
-    --color-border-hover: #2a3752;
+    --color-bg-primary: #07090e;
+    --color-bg-secondary: #0c101a;
+    --color-bg-tertiary: #131b2e;
+    --color-border: #1e293b;
+    --color-border-hover: #334155;
     --color-green: #10b981;
     --color-red: #f43f5e;
     --color-amber: #f59e0b;
@@ -22,13 +22,18 @@
     margin: 0;
     padding: 0;
     width: 100%;
-    height: 100%;
+    min-height: 100%;
     background-color: #07090e;
     color: #f1f5f9;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-feature-settings: "tnum" on, "zero" on;
   }
 
   #root {
@@ -58,32 +63,27 @@
   background: #2a3752;
 }
 
-/* Trading Ticker Flash Animations */
-@keyframes flash-green {
-  0% { background-color: rgba(16, 185, 129, 0.35); }
-  100% { background-color: transparent; }
+/* Hide scrollbar for clean horizontal mobile city strips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-@keyframes flash-red {
-  0% { background-color: rgba(244, 63, 94, 0.35); }
-  100% { background-color: transparent; }
+/* Safe area padding for mobile bottom nav on iOS / modern Android */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0.5rem);
 }
 
-.flash-up {
-  animation: flash-green 0.75s ease-out;
-}
-
-.flash-down {
-  animation: flash-red 0.75s ease-out;
-}
-
-/* Pulse Glow for Countdown */
+/* Pulse Glow for Countdown and urgent alerts */
 @keyframes pulse-glow-red {
   0%, 100% {
-    box-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+    box-shadow: 0 0 12px rgba(244, 63, 94, 0.3);
   }
   50% {
-    box-shadow: 0 0 35px rgba(244, 63, 94, 0.65);
+    box-shadow: 0 0 25px rgba(244, 63, 94, 0.65);
   }
 }
 
@@ -91,3 +91,17 @@
   animation: pulse-glow-red 1.2s infinite ease-in-out;
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
