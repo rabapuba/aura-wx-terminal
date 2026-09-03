@@ -12,23 +12,33 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('aura_wx_theme') as Theme | null;
-      if (stored === 'dark' || stored === 'light') return stored;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const stored = window.localStorage.getItem('aura_wx_theme') as Theme | null;
+        if (stored === 'dark' || stored === 'light') return stored;
+      }
+    } catch (e) {
+      console.warn('localStorage access restricted:', e);
     }
     return 'dark'; // Default to institutional dark mode
   });
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-      root.classList.remove('light');
-    } else {
-      root.classList.remove('dark');
-      root.classList.add('light');
+    try {
+      const root = document.documentElement;
+      if (theme === 'dark') {
+        root.classList.add('dark');
+        root.classList.remove('light');
+      } else {
+        root.classList.remove('dark');
+        root.classList.add('light');
+      }
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('aura_wx_theme', theme);
+      }
+    } catch (e) {
+      console.warn('Failed to persist theme:', e);
     }
-    localStorage.setItem('aura_wx_theme', theme);
   }, [theme]);
 
   const toggleTheme = () => {
