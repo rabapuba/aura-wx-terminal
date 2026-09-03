@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ThemeProvider } from './context/ThemeContext';
 import { WeatherMarketProvider, useWeatherMarket } from './context/WeatherMarketContext';
 import { TopStatusBar } from './components/layout/TopStatusBar';
 import { DesktopSidebar, type NavTabId } from './components/layout/DesktopSidebar';
@@ -24,19 +25,19 @@ const AppContent: React.FC = () => {
   } = useWeatherMarket();
 
   return (
-    <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Top Telemetry & Status Bar */}
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0f141c] text-slate-900 dark:text-slate-100 flex flex-col font-sans selection:bg-sky-500/20 selection:text-sky-700 dark:selection:text-sky-300 transition-colors">
+      {/* Top Status & Telemetry Bar with Theme Switcher */}
       <TopStatusBar />
 
       {/* Mobile Horizontal City Navigation Strip */}
       <MobileNavBar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-      {/* Main App Grid: Desktop Sidebar + View Container */}
+      {/* Main Terminal Layout: Sidebar + Active View */}
       <div className="flex-1 flex flex-row overflow-hidden">
-        {/* Desktop Persistent Sidebar */}
+        {/* Persistent Bloomberg-Style Sidebar */}
         <DesktopSidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-        {/* View Port Area */}
+        {/* Viewport Area */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-5 max-w-[1920px] mx-auto w-full">
           {activeTab === 'live-command' && (
             <LiveCommandView onOpenOrderTicket={(edge) => setStagedEdge(edge)} />
@@ -52,7 +53,7 @@ const AppContent: React.FC = () => {
         </main>
       </div>
 
-      {/* Institutional Quick Order Ticket Modal */}
+      {/* Quick Order Execution Ticket Modal */}
       {stagedEdge && (
         <QuickOrderTicket
           initialEdge={stagedEdge}
@@ -76,8 +77,10 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <WeatherMarketProvider>
-      <AppContent />
-    </WeatherMarketProvider>
+    <ThemeProvider>
+      <WeatherMarketProvider>
+        <AppContent />
+      </WeatherMarketProvider>
+    </ThemeProvider>
   );
 }

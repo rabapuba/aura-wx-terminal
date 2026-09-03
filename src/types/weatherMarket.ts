@@ -1,6 +1,11 @@
-// Institutional Weather Prediction Markets Domain Types
+// Institutional Daily High Temperature (TMAX) Prediction Markets Domain Types
 
 export type CityId = 'chicago' | 'newyork' | 'losangeles' | 'miami' | 'austin';
+
+export interface MarketDirectLinks {
+  kalshiUrl: string;
+  polymarketUrl: string;
+}
 
 export interface CityMetadata {
   id: CityId;
@@ -12,15 +17,19 @@ export interface CityMetadata {
   longitude: number;
   timezone: string;
   elevationFt: number;
+  nwsClimateOffice: string; // e.g. "NWS Chicago (LOT)"
+  directLinks: MarketDirectLinks;
 }
 
 export interface TemperatureBracket {
-  id: string; // e.g. 'ord-t70-71'
+  id: string; // e.g. 'ord-tmax-75-76'
   cityId: CityId;
-  label: string; // e.g. "70°F - 71°F", "< 68°F", "≥ 74°F"
+  label: string; // e.g. "75°F - 76°F", "< 73°F", "≥ 79°F"
   minTemp: number; // inclusive, -Infinity for "<"
   maxTemp: number; // exclusive, Infinity for "≥"
   strikeTemp: number; // representative midpoint or threshold
+  isEliminatedByObservedMax: boolean; // true if runningDailyMax >= maxTemp
+  directLinks: MarketDirectLinks;
 }
 
 export type MarketPlatform = 'kalshi' | 'polymarket';
@@ -48,7 +57,7 @@ export interface MarketContract {
   bracketId: string;
   cityId: CityId;
   platform: MarketPlatform;
-  ticker: string; // e.g. "KXCHID-26SEP04-T72" or "POLY-ORD-72"
+  ticker: string; // e.g. "KXHIGHD-26SEP04-T75" or "POLY-TMAX-ORD-75"
   title: string;
   side: ContractSide;
   yesBook: OrderBook;
@@ -59,12 +68,13 @@ export interface MarketContract {
   bestNoAsk: number;
   lastTradePrice: number;
   lastTradeTime: number;
-  impliedProbability: number; // based on midpoint
+  impliedProbability: number;
+  directUrl: string;
 }
 
 export interface WeatherEnsembleMember {
-  modelName: 'WeatherNext_3' | 'ECMWF_HRES' | 'GFS_FV3' | 'HRRR_CONUS' | 'AI_Neural_Blend';
-  predictedTemp: number;
+  modelName: 'WeatherNext_3' | 'HRRR_CONUS' | 'ECMWF_HRES' | 'GFS_FV3' | 'AI_Neural_Blend';
+  predictedDailyMax: number;
   weight: number;
   confidence: number;
 }
@@ -72,11 +82,13 @@ export interface WeatherEnsembleMember {
 export interface WeatherForecast {
   cityId: CityId;
   timestamp: number; // epoch ms
-  targetHourTimestamp: number; // epoch ms
-  currentTemp: number; // Fahrenheit
-  forecastMeanTemp: number; // Fahrenheit
+  targetDate: string; // e.g. "2026-09-04"
+  currentAmbientTemp: number; // Current real-time thermometer reading
+  runningDailyMaxTemp: number; // Highest temp observed so far today (NWS ASOS CLI benchmark)
+  forecastDailyHighTemp: number; // Modeled expected TMAX (mean of distribution mu)
   standardDeviation: number; // Sigma in degrees F
   skewness: number;
+  peakSolarZenithHour: string; // e.g. "15:30 Local"
   dewPoint: number;
   relativeHumidity: number;
   barometricPressureInHg: number;
@@ -89,15 +101,17 @@ export interface WeatherForecast {
   radarReflectivityDbz: number;
   confidenceScore: number; // 0 to 100
   ensembleMembers: WeatherEnsembleMember[];
-  historicalBrierScore: number; // 0 (perfect) to 1
+  historicalBrierScore: number;
   forecastGeneratedAt: number;
 }
+
+export type StrategyPhaseTag = 'EARLY_ALPHA' | 'LATE_SWEEP' | 'CORE_EDGE' | 'ARBITRAGE' | 'NEUTRAL';
 
 export interface QuantitativeEdge {
   bracketId: string;
   cityId: CityId;
   bracketLabel: string;
-  modelProbability: number; // P(bracket) from WeatherNext 3 ensemble
+  modelProbability: number; // P(bracket) from WeatherNext 3 TMAX ensemble
   kalshiYesPrice: number;
   kalshiNoPrice: number;
   polymarketYesPrice: number;
@@ -119,20 +133,29 @@ export interface QuantitativeEdge {
   recommendedSizeDollars: number;
   statisticalAsymmetryScore: number; // 0 to 100
   isArbitrageOpportunity: boolean;
-  arbitrageProfitSpread: number; // positive if yes_ask + no_ask < 1.0
+  arbitrageProfitSpread: number;
+  strategyTag: StrategyPhaseTag;
+  directLinks: MarketDirectLinks;
 }
 
-export interface HourlyPeriod {
-  periodId: string; // e.g. "20260904-0200"
+export type SessionPhase =
+  | 'PRE_MARKET'     // Morning: Before peak heating (00:00 - 11:00)
+  | 'PEAK_HEATING'    // Afternoon: Solar max heating window (11:00 - 17:00)
+  | 'LATE_SWEEP'      // Evening: Temperature cooling, TMAX virtually locked (17:00 - 23:00)
+  | 'SETTLEMENT_LOCK';// Midnight: NWS Daily Climate Report published & settled (23:00 - 23:59)
+
+export interface DailyMarketPeriod {
+  periodId: string; // e.g. "TMAX-2026-09-04"
+  marketDate: string; // e.g. "Sep 4, 2026"
   startTime: number;
-  endTime: number;
-  marketOpenTime: number;
-  marketCloseTime: number;
+  endTime: number; // 23:59:59 local / cutoff
+  marketLockTime: number;
   timeRemainingMs: number;
-  isPreMarket: boolean;
+  currentPhase: SessionPhase;
+  phaseLabel: string;
   isMarketOpen: boolean;
   isSettled: boolean;
-  settlementTemp?: number;
+  settlementTmaxTemp?: number;
   settlementBracketId?: string;
 }
 
@@ -153,6 +176,7 @@ export interface TradeOrder {
   expectedValue: number;
   status: OrderStatus;
   timestamp: number;
+  strategyPhase: SessionPhase;
   filledShares?: number;
   averageFillPrice?: number;
 }
@@ -170,6 +194,7 @@ export interface Position {
   unrealizedRoiPct: number;
   costBasis: number;
   potentialPayout: number;
+  strategyPhase: SessionPhase;
   openedAt: number;
 }
 
@@ -190,13 +215,17 @@ export interface AgentConfig {
   autoTradingEnabled: boolean;
   minEvHurdlePct: number; // e.g. 5.0 for 5% minimum EV
   kellyFractionMultiplier: number; // e.g. 0.25 for quarter-Kelly
-  maxPositionSizeDollars: number; // e.g. $5,000
+  maxPositionSizeDollars: number; // e.g. $3,000
   maxPortfolioRiskPct: number; // e.g. 20%
   stopLossPct: number; // e.g. 35%
   takeProfitPct: number; // e.g. 80%
   autoHedgeArbitrage: boolean;
   preMarketExecutionDelayMs: number;
   preferredPlatform: 'AUTO_BEST' | 'KALSHI' | 'POLYMARKET';
+  enableEarlyAlpha: boolean;
+  enableLateSweep: boolean;
+  earlyAlphaMaxPrice: number; // e.g. 0.35
+  lateSweepMinProbPct: number; // e.g. 78%
 }
 
 export type AuditLogSeverity = 'INFO' | 'SIGNAL' | 'ORDER' | 'FILL' | 'ROLLOVER' | 'ERROR' | 'ALERT';
@@ -225,7 +254,7 @@ export interface SystemHealth {
 }
 
 export interface PortfolioSummary {
-  cashBalance: number; // starting e.g. $100,000.00
+  cashBalance: number;
   investedCapital: number;
   unrealizedPnL: number;
   realizedPnL: number;

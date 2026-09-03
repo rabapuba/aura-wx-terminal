@@ -1,95 +1,122 @@
-// Auto-Period Rollover & Hourly Boundary Clock Engine
+// Auto-Period Rollover & Daily Market Lockout Clock Engine for Daily High (TMAX) Markets
 
-import type { HourlyPeriod, CityId, TemperatureBracket } from '../types/weatherMarket';
+import type { DailyMarketPeriod, CityId, TemperatureBracket, SessionPhase } from '../types/weatherMarket';
 
-export interface RolloverResolution {
+export interface DailySettlementResolution {
   periodId: string;
+  marketDate: string;
   resolvedAt: number;
-  settlementTemps: Record<CityId, number>;
+  officialDailyHighs: Record<CityId, number>;
   winningBrackets: Record<CityId, string>;
 }
 
 /**
- * Calculate the next hourly boundary (XX:00:00.000 UTC/Local)
+ * Determine daily session phase based on hour of day (0 to 23)
  */
-export function getNextHourlyBoundary(currentTimeMs: number = Date.now()): {
-  currentPeriodStartMs: number;
-  nextPeriodStartMs: number;
+export function getDailySessionPhase(hour: number): {
+  phase: SessionPhase;
+  label: string;
+} {
+  if (hour < 11) {
+    return {
+      phase: 'PRE_MARKET',
+      label: 'Pre-Market Solar Ramp (Morning)'
+    };
+  } else if (hour < 17) {
+    return {
+      phase: 'PEAK_HEATING',
+      label: 'Peak Solar Heating Window (TMAX Active)'
+    };
+  } else if (hour < 23) {
+    return {
+      phase: 'LATE_SWEEP',
+      label: 'Late-Session TMAX Sweep (High Locked)'
+    };
+  } else {
+    return {
+      phase: 'SETTLEMENT_LOCK',
+      label: 'NWS Climate Report Settlement Lock'
+    };
+  }
+}
+
+/**
+ * Compute current day start and end timestamps (00:00:00 to 23:59:59)
+ */
+export function getDailyMarketBoundary(currentTimeMs: number = Date.now()): {
+  dayStartMs: number;
+  dayEndMs: number;
   periodId: string;
+  marketDateStr: string;
 } {
   const date = new Date(currentTimeMs);
-  const currentPeriodStart = new Date(date);
-  currentPeriodStart.setMinutes(0, 0, 0);
-  const currentPeriodStartMs = currentPeriodStart.getTime();
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
 
-  const nextPeriodStart = new Date(currentPeriodStartMs + 3600000);
-  const nextPeriodStartMs = nextPeriodStart.getTime();
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
 
-  // Period ID format: YYYYMMDD-HH00
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const periodId = `${yyyy}${mm}${dd}-${hh}00`;
+  const periodId = `TMAX-${yyyy}-${mm}-${dd}`;
+  const marketDateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return {
-    currentPeriodStartMs,
-    nextPeriodStartMs,
-    periodId
+    dayStartMs: start.getTime(),
+    dayEndMs: end.getTime(),
+    periodId,
+    marketDateStr
   };
 }
 
 /**
- * Initialize an HourlyPeriod structure
+ * Initialize DailyMarketPeriod structure
  */
-export function createHourlyPeriod(currentTimeMs: number = Date.now()): HourlyPeriod {
-  const { currentPeriodStartMs, nextPeriodStartMs, periodId } = getNextHourlyBoundary(currentTimeMs);
-  const timeRemainingMs = Math.max(0, nextPeriodStartMs - currentTimeMs);
-
-  // Pre-market phase occurs during initial 10 mins before active order-matching opens
-  // or when remaining time is > 50 mins
-  const isPreMarket = timeRemainingMs > 50 * 60 * 1000;
+export function createDailyMarketPeriod(currentTimeMs: number = Date.now()): DailyMarketPeriod {
+  const { dayStartMs, dayEndMs, periodId, marketDateStr } = getDailyMarketBoundary(currentTimeMs);
+  const timeRemainingMs = Math.max(0, dayEndMs - currentTimeMs);
+  const currentHour = new Date(currentTimeMs).getHours();
+  const { phase, label } = getDailySessionPhase(currentHour);
 
   return {
     periodId,
-    startTime: currentPeriodStartMs,
-    endTime: nextPeriodStartMs,
-    marketOpenTime: currentPeriodStartMs,
-    marketCloseTime: nextPeriodStartMs - 60000, // Closes 1 min before official hour mark
+    marketDate: marketDateStr,
+    startTime: dayStartMs,
+    endTime: dayEndMs,
+    marketLockTime: dayEndMs - 60000,
     timeRemainingMs,
-    isPreMarket,
-    isMarketOpen: true,
+    currentPhase: phase,
+    phaseLabel: label,
+    isMarketOpen: phase !== 'SETTLEMENT_LOCK',
     isSettled: false
   };
 }
 
 /**
- * Format milliseconds into MM:SS or HH:MM:SS format
+ * Format milliseconds into HH:MM:SS format
  */
-export function formatCountdown(ms: number): {
+export function formatDailyCountdown(ms: number): {
   formatted: string;
+  hours: number;
   minutes: number;
   seconds: number;
-  isUrgent: boolean; // < 5 mins
-  isCritical: boolean; // < 1 min
+  isUrgent: boolean; // < 1 hour
+  isCritical: boolean; // < 15 mins
 } {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
-  const isUrgent = totalSeconds < 300; // < 5 minutes
-  const isCritical = totalSeconds < 60; // < 1 minute
+  const isUrgent = hours === 0;
+  const isCritical = hours === 0 && minutes < 15;
 
-  let formatted = '';
-  if (hours > 0) {
-    formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  } else {
-    formatted = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
+  const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
   return {
     formatted,
+    hours,
     minutes,
     seconds,
     isUrgent,
@@ -97,15 +124,16 @@ export function formatCountdown(ms: number): {
   };
 }
 
+export const formatCountdown = formatDailyCountdown;
+
 /**
- * Identify which temperature bracket wins for a given settlement temperature
+ * Resolve winning bracket given official NWS ASOS Daily Maximum temperature
  */
-export function resolveWinningBracket(brackets: TemperatureBracket[], settlementTemp: number): string {
+export function resolveWinningDailyHighBracket(brackets: TemperatureBracket[], officialMax: number): string {
   for (const bracket of brackets) {
-    if (settlementTemp >= bracket.minTemp && settlementTemp < bracket.maxTemp) {
+    if (officialMax >= bracket.minTemp && officialMax < bracket.maxTemp) {
       return bracket.id;
     }
   }
-  // Fallback to last bracket if out of bounds
   return brackets[brackets.length - 1]?.id ?? '';
 }

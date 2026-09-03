@@ -137,7 +137,7 @@ export function createMarketContract(
     cityId: bracket.cityId,
     platform,
     ticker,
-    title: `${bracket.cityId.toUpperCase()} Hourly Temp ${bracket.label}`,
+    title: `${bracket.cityId.toUpperCase()} Daily High ${bracket.label}`,
     side: 'YES',
     yesBook,
     noBook,
@@ -147,7 +147,8 @@ export function createMarketContract(
     bestNoAsk,
     lastTradePrice: bestYesBid,
     lastTradeTime: Date.now() - Math.floor(Math.random() * 12000),
-    impliedProbability: yesBook.midPrice
+    impliedProbability: yesBook.midPrice,
+    directUrl: platform === 'kalshi' ? bracket.directLinks.kalshiUrl : bracket.directLinks.polymarketUrl
   };
 }
 
@@ -203,21 +204,21 @@ export function applyMicroTick(contract: MarketContract): MarketContract {
  * Generate simulated execution trade tape item
  */
 export function generateSyntheticTrade(
-  cityId: CityId,
-  bracket: TemperatureBracket,
-  platform: MarketPlatform,
-  price: number,
-  side: 'YES' | 'NO'
+  contract: MarketContract,
+  strategyPhase: import('../types/weatherMarket').SessionPhase = 'PEAK_HEATING'
 ): TradeOrder {
+  const isYes = Math.random() > 0.45;
+  const side: 'YES' | 'NO' = isYes ? 'YES' : 'NO';
+  const price = isYes ? contract.bestYesBid : contract.bestNoBid;
   const shares = Math.round(50 + Math.random() * 450);
   const totalCost = Number((shares * price).toFixed(2));
   const potentialPayout = Number((shares * 1.0).toFixed(2));
 
   return {
     orderId: `ord-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-    bracketId: bracket.id,
-    cityId,
-    platform,
+    bracketId: contract.bracketId,
+    cityId: contract.cityId,
+    platform: contract.platform,
     side,
     type: 'MARKET',
     price,
@@ -227,6 +228,7 @@ export function generateSyntheticTrade(
     expectedValue: Number(((1.0 - price) * 0.15).toFixed(2)),
     status: 'FILLED',
     timestamp: Date.now(),
+    strategyPhase,
     filledShares: shares,
     averageFillPrice: price
   };

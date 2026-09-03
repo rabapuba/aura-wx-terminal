@@ -1,4 +1,4 @@
-// Central Institutional Weather Prediction Market Context & Reactive Engine
+// Central Institutional Daily High Temperature (TMAX) Prediction Market Context & Reactive Engine
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type {
@@ -7,7 +7,7 @@ import type {
   WeatherForecast,
   MarketContract,
   QuantitativeEdge,
-  HourlyPeriod,
+  DailyMarketPeriod,
   Position,
   SettledContract,
   TradeOrder,
@@ -18,15 +18,15 @@ import type {
   ContractSide,
   MarketPlatform
 } from '../types/weatherMarket';
-import { CORE_CITIES, generateTemperatureBrackets, fetchWeatherNextForecast } from '../services/weatherEngine';
-import { normalizeBracketProbabilities, evaluateBracketEdge } from '../services/quantitativeMath';
+import { CORE_CITIES, generateDailyHighBrackets, fetchWeatherNextForecast } from '../services/weatherEngine';
+import { evaluateDailyHighEdge } from '../services/quantitativeMath';
 import { createMarketContract, applyMicroTick, generateSyntheticTrade } from '../services/marketDataFeed';
-import { createHourlyPeriod, resolveWinningBracket, type RolloverResolution } from '../services/autoPeriodEngine';
+import { createDailyMarketPeriod, resolveWinningDailyHighBracket, type DailySettlementResolution } from '../services/autoPeriodEngine';
 
 export interface WeatherMarketState {
   selectedCityId: CityId;
   setSelectedCityId: (id: CityId) => void;
-  activePeriod: HourlyPeriod;
+  activePeriod: DailyMarketPeriod;
   speedMultiplier: number;
   setSpeedMultiplier: (speed: number) => void;
   bracketsByCity: Record<CityId, TemperatureBracket[]>;
@@ -53,7 +53,7 @@ export interface WeatherMarketState {
   ) => void;
   closePosition: (positionId: string) => void;
   forcePeriodRoll: () => void;
-  activeSettlementNotice: RolloverResolution | null;
+  activeSettlementNotice: DailySettlementResolution | null;
   dismissSettlementNotice: () => void;
   refreshForecasts: () => Promise<void>;
   isIngestingForecasts: boolean;
@@ -71,7 +71,11 @@ const DEFAULT_AGENT_CONFIG: AgentConfig = {
   takeProfitPct: 75,
   autoHedgeArbitrage: true,
   preMarketExecutionDelayMs: 400,
-  preferredPlatform: 'AUTO_BEST'
+  preferredPlatform: 'AUTO_BEST',
+  enableEarlyAlpha: true,
+  enableLateSweep: true,
+  earlyAlphaMaxPrice: 0.35,
+  lateSweepMinProbPct: 78
 };
 
 const CITY_KEYS: CityId[] = ['chicago', 'newyork', 'losangeles', 'miami', 'austin'];
@@ -79,9 +83,9 @@ const CITY_KEYS: CityId[] = ['chicago', 'newyork', 'losangeles', 'miami', 'austi
 export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [selectedCityId, setSelectedCityId] = useState<CityId>('chicago');
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(1);
-  const [activePeriod, setActivePeriod] = useState<HourlyPeriod>(() => createHourlyPeriod());
+  const [activePeriod, setActivePeriod] = useState<DailyMarketPeriod>(() => createDailyMarketPeriod());
   const [isIngestingForecasts, setIsIngestingForecasts] = useState<boolean>(false);
-  const [activeSettlementNotice, setActiveSettlementNotice] = useState<RolloverResolution | null>(null);
+  const [activeSettlementNotice, setActiveSettlementNotice] = useState<DailySettlementResolution | null>(null);
 
   // Core Market Data Stores
   const [bracketsByCity, setBracketsByCity] = useState<Record<CityId, TemperatureBracket[]>>({} as Record<CityId, TemperatureBracket[]>);
@@ -103,25 +107,28 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
     unrealizedPnL: 0.0,
     realizedPnL: 0.0,
     totalPortfolioValue: 100000.0,
-    winRatePct: 68.4,
-    totalTradesCount: 142,
-    sharpeRatio: 2.38,
-    maxDrawdownPct: 4.2
+    winRatePct: 71.2,
+    totalTradesCount: 184,
+    sharpeRatio: 2.64,
+    maxDrawdownPct: 3.8
   });
 
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({
     kalshiApiStatus: 'ONLINE',
-    kalshiLatencyMs: 14,
+    kalshiLatencyMs: 12,
     polymarketApiStatus: 'ONLINE',
-    polymarketLatencyMs: 22,
+    polymarketLatencyMs: 19,
     weatherNextApiStatus: 'ONLINE',
-    weatherNextLatencyMs: 8,
-    activeWebsockets: 3,
+    weatherNextLatencyMs: 34,
+    activeWebsockets: 10,
     lastHeartbeat: Date.now(),
-    cpuLoadPct: 12.4,
-    memoryUsageMb: 84.6
+    cpuLoadPct: 14.8,
+    memoryUsageMb: 86.4
   });
 
+  const isAgentExecutingRef = useRef<boolean>(false);
+
+  // Add audit log helper
   const addAuditLog = useCallback((
     severity: AuditLog['severity'],
     category: AuditLog['category'],
@@ -130,7 +137,7 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
     dataPayload?: Record<string, unknown>
   ) => {
     const log: AuditLog = {
-      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `log-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: Date.now(),
       severity,
       category,
@@ -138,13 +145,22 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
       cityId,
       dataPayload
     };
-    setAuditLogs((prev) => [log, ...prev.slice(0, 99)]);
+    setAuditLogs((prev) => [log, ...prev.slice(0, 199)]);
   }, []);
 
-  // Initialize or Re-initialize period markets and forecasts
-  const initializePeriod = useCallback(async (period: HourlyPeriod) => {
+  // Update Agent Config
+  const updateAgentConfig = useCallback((updates: Partial<AgentConfig>) => {
+    setAgentConfig((prev) => {
+      const next = { ...prev, ...updates };
+      addAuditLog('INFO', 'SYSTEM', `Agent configuration updated: ${Object.keys(updates).join(', ')}`);
+      return next;
+    });
+  }, [addAuditLog]);
+
+  // Ingest forecasts and evaluate Daily High (TMAX) edge matrix
+  const initializePeriod = useCallback(async (period: DailyMarketPeriod) => {
     setIsIngestingForecasts(true);
-    addAuditLog('INFO', 'WEATHER_NEXT', `Ingesting Google WeatherNext 3 high-resolution forecasts for 5 core cities (Target: ${new Date(period.endTime).toLocaleTimeString()})`);
+    addAuditLog('INFO', 'WEATHER_NEXT', `Ingesting Google WeatherNext 3 Daily High (TMAX) forecasts for 5 core cities (${period.marketDate})`);
 
     const newBrackets: Record<CityId, TemperatureBracket[]> = {} as Record<CityId, TemperatureBracket[]>;
     const newForecasts: Record<CityId, WeatherForecast | null> = {} as Record<CityId, WeatherForecast | null>;
@@ -158,26 +174,17 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
         const forecast = await fetchWeatherNextForecast(cityId, period.endTime);
         newForecasts[cityId] = forecast;
 
-        // Generate 5 strike brackets centered on current forecast
-        const brackets = generateTemperatureBrackets(cityId, forecast.forecastMeanTemp);
+        // Generate 5 strike brackets centered on modeled TMAX forecast
+        const brackets = generateDailyHighBrackets(cityId, forecast.forecastDailyHighTemp, forecast.runningDailyMaxTemp);
         newBrackets[cityId] = brackets;
-
-        // Compute normalized probabilities from WeatherNext Gaussian/Skew distribution
-        const probMap = normalizeBracketProbabilities(
-          brackets,
-          forecast.forecastMeanTemp,
-          forecast.standardDeviation,
-          forecast.skewness
-        );
 
         const edgesForCity: QuantitativeEdge[] = [];
 
         for (const bracket of brackets) {
-          const modelProb = probMap.get(bracket.id) ?? 0.2;
-
-          // Realistic synthetic market fair price: model probability + slight market maker margin/noise
-          const kalshiFair = Math.max(0.04, Math.min(0.96, modelProb + (Math.random() * 0.08 - 0.04)));
-          const polyFair = Math.max(0.04, Math.min(0.96, modelProb + (Math.random() * 0.09 - 0.045)));
+          // Compute baseline fair probability
+          const fairProb = bracket.isEliminatedByObservedMax ? 0.0001 : 0.20;
+          const kalshiFair = Math.max(0.02, Math.min(0.98, fairProb + (Math.random() * 0.08 - 0.04)));
+          const polyFair = Math.max(0.02, Math.min(0.98, fairProb + (Math.random() * 0.08 - 0.04)));
 
           const kContract = createMarketContract(bracket, kalshiFair, 'kalshi');
           const pContract = createMarketContract(bracket, polyFair, 'polymarket');
@@ -185,10 +192,12 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
           newKalshi[bracket.id] = kContract;
           newPoly[bracket.id] = pContract;
 
-          // Calculate institutional Expected Value and Edge
-          const edge = evaluateBracketEdge(
+          // Quantitative Edge evaluation
+          const edge = evaluateDailyHighEdge(
             bracket,
-            modelProb,
+            forecast.forecastDailyHighTemp,
+            forecast.standardDeviation,
+            forecast.runningDailyMaxTemp,
             kContract.bestYesAsk,
             kContract.bestNoAsk,
             pContract.bestYesAsk,
@@ -207,7 +216,7 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     }
 
-    // Sort edges globally by Statistical Asymmetry (highest EV / edge first)
+    // Sort edges globally by Statistical Asymmetry
     allEdgesList.sort((a, b) => b.statisticalAsymmetryScore - a.statisticalAsymmetryScore);
 
     setBracketsByCity(newBrackets);
@@ -221,7 +230,7 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
     addAuditLog(
       'INFO',
       'QUANT',
-      `Calculated pre-market edge matrix: ${allEdgesList.length} temperature brackets evaluated across Kalshi & Polymarket.`
+      `Calculated Daily High edge matrix: ${allEdgesList.length} brackets evaluated across Kalshi & Polymarket.`
     );
   }, [addAuditLog, portfolio.cashBalance, agentConfig.kellyFractionMultiplier]);
 
@@ -264,6 +273,7 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
       expectedValue: Number((shares * (1.0 - price) * 0.15).toFixed(2)),
       status: 'FILLED',
       timestamp: Date.now(),
+      strategyPhase: activePeriod.currentPhase,
       filledShares: shares,
       averageFillPrice: price
     };
@@ -306,75 +316,81 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
         unrealizedRoiPct: 0,
         costBasis: totalCost,
         potentialPayout: Number((shares * 1.0).toFixed(2)),
+        strategyPhase: activePeriod.currentPhase,
         openedAt: Date.now()
       };
       return [...prev, newPos];
     });
 
-    // Update portfolio balances
-    setPortfolio((prev) => ({
-      ...prev,
-      cashBalance: Number((prev.cashBalance - totalCost).toFixed(2)),
-      investedCapital: Number((prev.investedCapital + totalCost).toFixed(2)),
-      totalPortfolioValue: Number((prev.totalPortfolioValue).toFixed(2)),
-      totalTradesCount: prev.totalTradesCount + 1
-    }));
+    // Update portfolio cash
+    setPortfolio((prev) => {
+      const newCash = Number((prev.cashBalance - totalCost).toFixed(2));
+      const newInvested = Number((prev.investedCapital + totalCost).toFixed(2));
+      return {
+        ...prev,
+        cashBalance: newCash,
+        investedCapital: newInvested,
+        totalTradesCount: prev.totalTradesCount + 1
+      };
+    });
 
-    // Add to trade tape & audit log
+    // Append to live trade tape
     setTradeTape((prev) => [order, ...prev.slice(0, 49)]);
+
     addAuditLog(
       'ORDER',
       'EXECUTION',
-      `Filled ${shares.toLocaleString()} ${side} @ $${price.toFixed(2)} on ${platform.toUpperCase()} (${CORE_CITIES[cityId].name}) - Cost: $${totalCost.toLocaleString()}`,
+      `Filled ${shares.toLocaleString()} ${side} @ $${price.toFixed(2)} ($${totalCost.toLocaleString()}) on ${platform.toUpperCase()} [${CORE_CITIES[cityId].name}]`,
       cityId,
-      { bracketId, shares, price, platform, side }
+      { orderId: order.orderId, shares, price, totalCost }
     );
-  }, [portfolio.cashBalance, addAuditLog]);
+  }, [portfolio.cashBalance, activePeriod.currentPhase, addAuditLog]);
 
   // Close an active position
   const closePosition = useCallback((positionId: string) => {
-    const pos = positions.find((p) => p.positionId === positionId);
-    if (!pos) return;
+    setPositions((prev) => {
+      const target = prev.find((p) => p.positionId === positionId);
+      if (!target) return prev;
 
-    // Simulate closing at current bid
-    const exitPrice = pos.side === 'YES' ? Math.max(0.01, pos.currentPrice - 0.01) : Math.max(0.01, pos.currentPrice - 0.01);
-    const proceeds = Number((pos.shares * exitPrice).toFixed(2));
-    const pnl = Number((proceeds - pos.costBasis).toFixed(2));
+      const exitPrice = target.side === 'YES' ? target.currentPrice : (1.0 - target.currentPrice);
+      const grossProceeds = Number((target.shares * exitPrice).toFixed(2));
+      const realizedPnL = Number((grossProceeds - target.costBasis).toFixed(2));
 
-    setPositions((prev) => prev.filter((p) => p.positionId !== positionId));
-    setPortfolio((prev) => ({
-      ...prev,
-      cashBalance: Number((prev.cashBalance + proceeds).toFixed(2)),
-      investedCapital: Number((prev.investedCapital - pos.costBasis).toFixed(2)),
-      realizedPnL: Number((prev.realizedPnL + pnl).toFixed(2)),
-      totalPortfolioValue: Number((prev.totalPortfolioValue + pnl).toFixed(2))
-    }));
+      setPortfolio((p) => ({
+        ...p,
+        cashBalance: Number((p.cashBalance + grossProceeds).toFixed(2)),
+        investedCapital: Math.max(0, Number((p.investedCapital - target.costBasis).toFixed(2))),
+        realizedPnL: Number((p.realizedPnL + realizedPnL).toFixed(2)),
+        totalPortfolioValue: Number((p.totalPortfolioValue + realizedPnL).toFixed(2))
+      }));
 
-    addAuditLog(
-      'ORDER',
-      'EXECUTION',
-      `Closed position ${pos.shares} ${pos.side} @ $${exitPrice.toFixed(2)} - Realized PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`,
-      pos.cityId
-    );
-  }, [positions, addAuditLog]);
+      addAuditLog(
+        'ORDER',
+        'EXECUTION',
+        `Closed position ${positionId} (${target.shares} shares): Realized PnL ${realizedPnL >= 0 ? '+' : ''}$${realizedPnL.toFixed(2)}`,
+        target.cityId
+      );
 
-  // Period Rollover Engine: handles automatic rollover to the next hourly market
-  const executePeriodRollover = useCallback(async () => {
-    addAuditLog('ROLLOVER', 'SYSTEM', `Hourly boundary transition reached. Flushing stale market cache and settling active contracts...`);
+      return prev.filter((p) => p.positionId !== positionId);
+    });
+  }, [addAuditLog]);
 
-    const settlementTemps: Record<CityId, number> = {} as Record<CityId, number>;
+  // Force Daily Market Rollover & Settlement (Next Day Simulation)
+  const forcePeriodRoll = useCallback(async () => {
+    addAuditLog('ROLLOVER', 'SYSTEM', `Executing Daily Market Lockout & NWS Climate Report Settlement for ${activePeriod.marketDate}`);
+
+    // 1. Settle all 5 cities against observed Daily High (TMAX)
+    const officialDailyHighs: Record<CityId, number> = {} as Record<CityId, number>;
     const winningBrackets: Record<CityId, string> = {} as Record<CityId, string>;
 
-    // 1. Resolve final official temperature readings for all cities
     for (const cityId of CITY_KEYS) {
-      const forecast = forecastsByCity[cityId];
-      const actualFinal = forecast
-        ? Number((forecast.forecastMeanTemp + (Math.random() * 0.4 - 0.2)).toFixed(1))
-        : 72.0;
-      settlementTemps[cityId] = actualFinal;
+      const fc = forecastsByCity[cityId];
+      // Final official TMAX settled against NWS ASOS Daily Climate Report
+      const officialMax = fc ? fc.runningDailyMaxTemp : 78.0;
+      officialDailyHighs[cityId] = officialMax;
 
       const brackets = bracketsByCity[cityId] || [];
-      const winningId = resolveWinningBracket(brackets, actualFinal);
+      const winningId = resolveWinningDailyHighBracket(brackets, officialMax);
       winningBrackets[cityId] = winningId;
     }
 
@@ -408,7 +424,6 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
       });
     });
 
-    // Update portfolio with settlement results
     setPortfolio((prev) => ({
       ...prev,
       cashBalance: Number((prev.cashBalance + prev.investedCapital + totalRealizedFromRollover).toFixed(2)),
@@ -420,28 +435,33 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
     setSettledHistory((prev) => [...settledList, ...prev]);
     setPositions([]);
 
-    const resolution: RolloverResolution = {
+    const resolution: DailySettlementResolution = {
       periodId: activePeriod.periodId,
+      marketDate: activePeriod.marketDate,
       resolvedAt: Date.now(),
-      settlementTemps,
+      officialDailyHighs,
       winningBrackets
     };
     setActiveSettlementNotice(resolution);
 
-    // 3. Initialize next hourly period (T + 1 hour)
-    const nextStartTime = activePeriod.endTime;
-    const nextEndTime = nextStartTime + 3600000;
+    // 3. Initialize next day's market period
+    const nextStartTime = activePeriod.endTime + 1000;
     const date = new Date(nextStartTime);
-    const nextPeriodId = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}00`;
+    const nextDateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const nextPeriodId = `TMAX-${yyyy}-${mm}-${dd}`;
 
-    const newPeriod: HourlyPeriod = {
+    const newPeriod: DailyMarketPeriod = {
       periodId: nextPeriodId,
+      marketDate: nextDateStr,
       startTime: nextStartTime,
-      endTime: nextEndTime,
-      marketOpenTime: nextStartTime,
-      marketCloseTime: nextEndTime - 60000,
-      timeRemainingMs: 3600000,
-      isPreMarket: true,
+      endTime: nextStartTime + 86400000 - 1000,
+      marketLockTime: nextStartTime + 86400000 - 60000,
+      timeRemainingMs: 86400000,
+      currentPhase: 'PRE_MARKET',
+      phaseLabel: 'Pre-Market Solar Ramp (Morning)',
       isMarketOpen: true,
       isSettled: false
     };
@@ -452,40 +472,25 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
     addAuditLog(
       'ROLLOVER',
       'SYSTEM',
-      `Period rollover complete. Initialized new hourly market: ${newPeriod.periodId}. Active cache refreshed.`
+      `Rollover Complete: Shifted to ${nextDateStr}. NWS CLI PnL: ${totalRealizedFromRollover >= 0 ? '+' : ''}$${totalRealizedFromRollover.toFixed(2)}`
     );
   }, [activePeriod, forecastsByCity, bracketsByCity, positions, initializePeriod, addAuditLog]);
 
-  // Force manual period roll for user testing
-  const forcePeriodRoll = useCallback(() => {
-    executePeriodRollover();
-  }, [executePeriodRollover]);
-
-  const dismissSettlementNotice = useCallback(() => {
+  const dismissSettlementNotice = () => {
     setActiveSettlementNotice(null);
-  }, []);
+  };
 
-  const updateAgentConfig = useCallback((updates: Partial<AgentConfig>) => {
-    setAgentConfig((prev) => {
-      const next = { ...prev, ...updates };
-      addAuditLog('INFO', 'QUANT', `Agent configuration updated: AutoTrading=${next.autoTradingEnabled}, MinEV=${next.minEvHurdlePct}%, Kelly=${next.kellyFractionMultiplier}x`);
-      return next;
-    });
-  }, [addAuditLog]);
-
-  // Live Micro-Tick Engine: Perturbs order books every 400ms to simulate live CLOB liquidity updates
+  // Simulated live micro-ticks and order flow loop
   useEffect(() => {
-    const interval = setInterval(() => {
+    const tickInterval = setInterval(() => {
+      // Perturb Kalshi & Polymarket order books slightly
       setKalshiContracts((prev) => {
         const next = { ...prev };
         const keys = Object.keys(next);
         if (keys.length === 0) return prev;
-        // pick 2 random contracts to tick
-        for (let i = 0; i < 2; i++) {
-          const randKey = keys[Math.floor(Math.random() * keys.length)];
-          if (next[randKey]) {
-            next[randKey] = applyMicroTick(next[randKey]);
-          }
+        const randomKey = keys[Math.floor(Math.random() * keys.length)];
+        if (next[randomKey]) {
+          next[randomKey] = applyMicroTick(next[randomKey]);
         }
         return next;
       });
@@ -494,64 +499,69 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
         const next = { ...prev };
         const keys = Object.keys(next);
         if (keys.length === 0) return prev;
-        for (let i = 0; i < 2; i++) {
-          const randKey = keys[Math.floor(Math.random() * keys.length)];
-          if (next[randKey]) {
-            next[randKey] = applyMicroTick(next[randKey]);
-          }
+        const randomKey = keys[Math.floor(Math.random() * keys.length)];
+        if (next[randomKey]) {
+          next[randomKey] = applyMicroTick(next[randomKey]);
         }
         return next;
       });
 
-      // Update latencies slightly
-      setSystemHealth((prev) => ({
-        ...prev,
-        kalshiLatencyMs: Math.max(10, Math.min(28, prev.kalshiLatencyMs + Math.round((Math.random() - 0.48) * 3))),
-        polymarketLatencyMs: Math.max(16, Math.min(36, prev.polymarketLatencyMs + Math.round((Math.random() - 0.48) * 4))),
-        weatherNextLatencyMs: Math.max(5, Math.min(14, prev.weatherNextLatencyMs + Math.round((Math.random() - 0.5) * 2))),
-        lastHeartbeat: Date.now()
-      }));
-
-      // Occasionally emit synthetic trade on the live tape
+      // Synthetic external retail tape trade
       if (Math.random() > 0.65) {
-        const randomCity = CITY_KEYS[Math.floor(Math.random() * CITY_KEYS.length)];
-        const brackets = bracketsByCity[randomCity];
-        if (brackets && brackets.length > 0) {
-          const randomBracket = brackets[Math.floor(Math.random() * brackets.length)];
-          const platform: MarketPlatform = Math.random() > 0.5 ? 'kalshi' : 'polymarket';
-          const side: ContractSide = Math.random() > 0.5 ? 'YES' : 'NO';
-          const price = Number((0.25 + Math.random() * 0.5).toFixed(2));
-          const trade = generateSyntheticTrade(randomCity, randomBracket, platform, price, side);
-          setTradeTape((tape) => [trade, ...tape.slice(0, 49)]);
+        const contracts = Object.values(kalshiContracts);
+        if (contracts.length > 0) {
+          const sampleContract = contracts[Math.floor(Math.random() * contracts.length)];
+          const synthetic = generateSyntheticTrade(sampleContract);
+          setTradeTape((prev) => [synthetic, ...prev.slice(0, 49)]);
         }
       }
-    }, 450);
 
-    return () => clearInterval(interval);
-  }, [bracketsByCity]);
+      // Heartbeat & latency jitter
+      setSystemHealth((prev) => ({
+        ...prev,
+        lastHeartbeat: Date.now(),
+        kalshiLatencyMs: Math.max(9, Math.min(28, prev.kalshiLatencyMs + (Math.random() > 0.5 ? 1 : -1))),
+        polymarketLatencyMs: Math.max(14, Math.min(38, prev.polymarketLatencyMs + (Math.random() > 0.5 ? 1 : -1))),
+        weatherNextLatencyMs: Math.max(25, Math.min(48, prev.weatherNextLatencyMs + (Math.random() > 0.5 ? 1 : -1)))
+      }));
+    }, 1800 / speedMultiplier);
 
-  // AI Trading Agent Autonomous Execution Loop
-  const isAgentExecutingRef = useRef(false);
+    return () => clearInterval(tickInterval);
+  }, [speedMultiplier, kalshiContracts]);
+
+  // Autonomous Quantitative Trading Agent Execution Loop
   useEffect(() => {
     if (!agentConfig.autoTradingEnabled) return;
 
     const agentInterval = setInterval(() => {
       if (isAgentExecutingRef.current || allEdges.length === 0) return;
 
-      // Find best qualifying edge
+      const currentPhase = activePeriod.currentPhase;
       const candidates = allEdges.filter((edge) => {
         if (edge.isArbitrageOpportunity && agentConfig.autoHedgeArbitrage) return true;
         const maxEv = Math.max(edge.evYes, edge.evNo);
         const minEvRequired = agentConfig.minEvHurdlePct / 100;
-        return maxEv >= minEvRequired && edge.recommendedSide !== 'NEUTRAL';
+
+        if (maxEv < minEvRequired || edge.recommendedSide === 'NEUTRAL') return false;
+
+        // Early Alpha filter: cheap contracts <= $0.35
+        if (currentPhase === 'PRE_MARKET' && agentConfig.enableEarlyAlpha) {
+          const targetPrice = edge.recommendedSide === 'YES' ? edge.bestYesAsk : edge.bestNoAsk;
+          return edge.strategyTag === 'EARLY_ALPHA' || targetPrice <= agentConfig.earlyAlphaMaxPrice;
+        }
+
+        // Late Sweep filter: high win probability >= 78%
+        if (currentPhase === 'LATE_SWEEP' && agentConfig.enableLateSweep) {
+          const winProb = edge.recommendedSide === 'YES' ? edge.modelProbability : 1.0 - edge.modelProbability;
+          return edge.strategyTag === 'LATE_SWEEP' || (winProb * 100) >= agentConfig.lateSweepMinProbPct;
+        }
+
+        return true;
       });
 
       if (candidates.length === 0) return;
 
-      // Pick top candidate
       const topEdge = candidates[0];
-
-      // Check if we already have a position in this bracket
       const hasPosition = positions.some((p) => p.bracketId === topEdge.bracketId);
       if (hasPosition) return;
 
@@ -559,11 +569,10 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
 
       try {
         if (topEdge.isArbitrageOpportunity && agentConfig.autoHedgeArbitrage) {
-          // Instant Risk-Free Cross-Market Arbitrage!
           const arbSize = Math.min(agentConfig.maxPositionSizeDollars / 2, 1000);
           const shares = Math.floor(arbSize / topEdge.bestYesAsk);
           if (shares > 10) {
-            addAuditLog('SIGNAL', 'QUANT', `Arbitrage Detected on ${topEdge.bracketLabel} (${topEdge.cityId.toUpperCase()}): Kalshi Yes + Polymarket No < 1.0! Executing dual hedge.`, topEdge.cityId);
+            addAuditLog('SIGNAL', 'QUANT', `Cross-Market Arbitrage on ${topEdge.bracketLabel} (${topEdge.cityId.toUpperCase()}): Kalshi Yes + Poly No < 1.0`, topEdge.cityId);
             executeTrade(topEdge.bracketId, topEdge.cityId, topEdge.bestYesPlatform, 'YES', shares, topEdge.bestYesAsk);
             executeTrade(topEdge.bracketId, topEdge.cityId, topEdge.bestNoPlatform, 'NO', shares, topEdge.bestNoAsk);
           }
@@ -579,7 +588,7 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
             addAuditLog(
               'SIGNAL',
               'QUANT',
-              `AI Signal: ${side} on ${topEdge.bracketLabel} (${topEdge.cityId.toUpperCase()}) | Model P=${(topEdge.modelProbability * 100).toFixed(1)}% vs Market=${(price * 100).toFixed(1)}¢ | EV=+${((side === 'YES' ? topEdge.evYes : topEdge.evNo) * 100).toFixed(1)}% | Kelly=${(topEdge.recommendedKellyFraction * 100).toFixed(1)}%`,
+              `Daily High Signal: ${side} on ${topEdge.bracketLabel} (${topEdge.cityId.toUpperCase()}) | Model P=${(topEdge.modelProbability * 100).toFixed(1)}% vs Market=${(price * 100).toFixed(1)}¢ | EV=+${((side === 'YES' ? topEdge.evYes : topEdge.evNo) * 100).toFixed(1)}%`,
               topEdge.cityId
             );
             executeTrade(topEdge.bracketId, topEdge.cityId, platform, side, shares, price);
@@ -590,10 +599,10 @@ export const WeatherMarketProvider: React.FC<{ children: React.ReactNode }> = ({
           isAgentExecutingRef.current = false;
         }, 1500);
       }
-    }, 2800);
+    }, 2600);
 
     return () => clearInterval(agentInterval);
-  }, [agentConfig, allEdges, positions, executeTrade, addAuditLog]);
+  }, [agentConfig, allEdges, positions, executeTrade, addAuditLog, activePeriod.currentPhase]);
 
   return (
     <WeatherMarketContext.Provider

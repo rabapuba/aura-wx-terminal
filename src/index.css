@@ -2,16 +2,35 @@
 
 @layer base {
   :root {
-    --color-bg-primary: #07090e;
-    --color-bg-secondary: #0c101a;
-    --color-bg-tertiary: #131b2e;
-    --color-border: #1e293b;
-    --color-border-hover: #334155;
+    /* Lite Theme Variables */
+    --bg-primary: #f8fafc;
+    --bg-secondary: #f1f5f9;
+    --bg-card: #ffffff;
+    --border-subtle: #e2e8f0;
+    --border-hover: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+    --color-green: #059669;
+    --color-red: #dc2626;
+    --color-amber: #d97706;
+    --color-cyan: #0284c7;
+  }
+
+  html.dark {
+    /* Institutional Eye-Comfort Charcoal Dark Theme (NO pure black, NO blinding neon) */
+    --bg-primary: #0f141c;
+    --bg-secondary: #141a24;
+    --bg-card: #181f2c;
+    --border-subtle: #263147;
+    --border-hover: #33415e;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
     --color-green: #10b981;
-    --color-red: #f43f5e;
+    --color-red: #e11d48;
     --color-amber: #f59e0b;
-    --color-cyan: #06b6d4;
-    --color-purple: #a855f7;
+    --color-cyan: #38bdf8;
   }
 
   * {
@@ -23,12 +42,13 @@
     padding: 0;
     width: 100%;
     min-height: 100%;
-    background-color: #07090e;
-    color: #f1f5f9;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   code, kbd, samp, pre, .font-mono {
@@ -50,17 +70,26 @@
   height: 5px;
 }
 
-::-webkit-scrollbar-track {
-  background: #080b11;
+html.dark ::-webkit-scrollbar-track {
+  background: #0f141c;
 }
-
-::-webkit-scrollbar-thumb {
-  background: #1c2538;
+html.dark ::-webkit-scrollbar-thumb {
+  background: #263147;
   border-radius: 4px;
 }
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #33415e;
+}
 
-::-webkit-scrollbar-thumb:hover {
-  background: #2a3752;
+html.light ::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+html.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 /* Hide scrollbar for clean horizontal mobile city strips */
@@ -77,24 +106,24 @@
   padding-bottom: env(safe-area-inset-bottom, 0.5rem);
 }
 
-/* Pulse Glow for Countdown and urgent alerts */
-@keyframes pulse-glow-red {
+/* Non-straining gentle glow animations */
+@keyframes pulse-soft-red {
   0%, 100% {
-    box-shadow: 0 0 12px rgba(244, 63, 94, 0.3);
+    box-shadow: 0 0 8px rgba(225, 29, 72, 0.25);
   }
   50% {
-    box-shadow: 0 0 25px rgba(244, 63, 94, 0.65);
+    box-shadow: 0 0 16px rgba(225, 29, 72, 0.45);
   }
 }
 
 .glow-urgent {
-  animation: pulse-glow-red 1.2s infinite ease-in-out;
+  animation: pulse-soft-red 1.5s infinite ease-in-out;
 }
 
 @keyframes fade-in {
   from {
     opacity: 0;
-    transform: translateY(3px);
+    transform: translateY(2px);
   }
   to {
     opacity: 1;
@@ -103,5 +132,5 @@
 }
 
 .animate-fade-in {
-  animation: fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: fade-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
