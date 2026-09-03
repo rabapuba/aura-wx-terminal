@@ -57,7 +57,7 @@ export const TopStatusBar: React.FC = () => {
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
             </div>
             <span className="font-mono text-xs sm:text-sm font-bold tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-              AURA<span className="text-sky-600 dark:text-sky-400">-WX</span>
+              Aura<span className="text-sky-600 dark:text-sky-400"> WX Terminal</span>
             </span>
             <span className="hidden md:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 border border-sky-200 dark:border-sky-800/50 rounded">
               TMAX DAILY PRO
