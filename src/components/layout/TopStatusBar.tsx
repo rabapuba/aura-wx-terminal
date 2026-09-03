@@ -150,16 +150,22 @@ export const TopStatusBar: React.FC = () => {
             </div>
           </div>
 
-          {/* Theme Switcher Toggle (Sun / Moon) */}
+          {/* Theme Switcher Toggle */}
           <button
             onClick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to Lite Mode' : 'Switch to Dark Mode (Charcoal Eye-Comfort)'}
-            className="p-1.5 rounded-lg border transition-colors bg-slate-100 dark:bg-[#181f2c] text-slate-700 dark:text-slate-300 border-slate-200 dark:border-[#263147] hover:bg-slate-200 dark:hover:bg-[#263147]"
+            title={theme === 'dark' ? 'Switch to Lite Mode (Clean)' : 'Switch to Dark Mode (Pro)'}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold font-mono border transition-all flex items-center gap-1.5 bg-slate-100 dark:bg-[#263147] border-slate-300 dark:border-[#334155] text-slate-700 dark:text-amber-300 hover:bg-slate-200 dark:hover:bg-[#334155]"
           >
             {theme === 'dark' ? (
-              <Sun className="w-4 h-4 text-amber-400 transition-transform hover:rotate-45" />
+              <>
+                <Moon className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">🌙 Dark Mode (Pro)</span>
+              </>
             ) : (
-              <Moon className="w-4 h-4 text-slate-700 transition-transform hover:-rotate-12" />
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-500" />
+                <span className="hidden sm:inline">☀️ Lite Mode (Clean)</span>
+              </>
             )}
           </button>
 

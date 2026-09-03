@@ -4,6 +4,7 @@ export type Theme = 'dark' | 'light';
 
 interface ThemeContextType {
   theme: Theme;
+  isDark: boolean;
   toggleTheme: () => void;
   setTheme: (theme: Theme) => void;
 }
@@ -14,6 +15,10 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [theme, setThemeState] = useState<Theme>(() => {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
+        const savedTheme = window.localStorage.getItem('theme');
+        if (savedTheme === 'dark') return 'dark';
+        if (savedTheme === 'lite' || savedTheme === 'light') return 'light';
+
         const stored = window.localStorage.getItem('aura_wx_theme') as Theme | null;
         if (stored === 'dark' || stored === 'light') return stored;
       }
@@ -22,6 +27,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     return 'dark'; // Default to institutional dark mode
   });
+
+  const isDark = theme === 'dark';
 
   useEffect(() => {
     try {
@@ -34,12 +41,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         root.classList.add('light');
       }
       if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('theme', isDark ? 'dark' : 'lite');
         window.localStorage.setItem('aura_wx_theme', theme);
       }
     } catch (e) {
       console.warn('Failed to persist theme:', e);
     }
-  }, [theme]);
+  }, [theme, isDark]);
 
   const toggleTheme = () => {
     setThemeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -50,7 +58,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, isDark, toggleTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );
