@@ -56,6 +56,10 @@
     </div>
 
     <div class="top-bar-right">
+      <div id="orderbookLiveBadge" style="display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--color-safe);" title="Orderbook Fast Auto-Refresh (4s)">
+        <span class="status-dot active" style="background:var(--color-safe);"></span>
+        <span>ORDERBOOK: <b id="orderbookPollStatus">LIVE (4s)</b></span>
+      </div>
       <div id="rolloverIndicator" style="display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--kalshi-cyan);">
         <span class="status-dot" style="background:var(--kalshi-cyan);"></span>
         <span>AUTO-ROLLOVER: <b>ACTIVE</b></span>
@@ -85,11 +89,12 @@
   <div class="modal-backdrop" id="executionModalBackdrop" role="dialog" aria-modal="true">
     <div class="modal-container">
       <div class="modal-header">
-        <div class="modal-title-group">
+        <div class="modal-title-group" style="flex-wrap:wrap; gap:8px;">
           <span class="station-badge" id="modalStationBadge">KMIA</span>
           <span class="modal-city-name" id="modalCityName">Miami, FL</span>
           <span class="series-tag" id="modalSeriesTicker">KXTEMPMIAH</span>
-          <div class="settlement-risk-badge" id="modalRiskBadge">🟢 SAFE ZONE</div>
+          <span class="modal-market-hour" id="modalMarketHour">Target Hour: --:-- - --:-- Local Time [Current T]</span>
+          <div class="settlement-risk-badge" id="modalRiskBadge">🟢 SAFE [MM:SS]</div>
         </div>
         <button class="modal-close-btn" id="modalCloseBtn" aria-label="Close modal">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">

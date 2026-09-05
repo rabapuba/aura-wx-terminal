@@ -363,6 +363,44 @@ html, body {
   50% { opacity: 0.6; }
 }
 
+/* Market Hour Banner */
+.city-market-hour-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 2px 6px;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.city-market-hour-banner .hour-tag-current {
+  color: var(--kalshi-cyan);
+  font-weight: 700;
+}
+
+.city-market-hour-banner .hour-tag-next {
+  color: var(--text-dim);
+}
+
+.modal-market-hour {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--kalshi-cyan);
+  background: var(--bg-surface);
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+}
+
 /* Dual Horizon Split Panel */
 .dual-horizon-container {
   display: grid;

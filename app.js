@@ -82,7 +82,8 @@ const KalshiAgent = (() => {
   ];
 
   const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
-  const POLLING_INTERVAL_MS = 30000; // 30s auto-refresh
+  const POLLING_INTERVAL_MS = 30000; // 30s auto-refresh for weather models & METAR
+  const ORDERBOOK_POLL_INTERVAL_MS = 4000; // 4s fast auto-refresh for Kalshi CLOB orderbook & live edge
   const METAR_API_URL = 'https://aviationweather.gov/api/data/metar?ids=KMIA,KLAX,KMDW,KJFK,KDCA,KAUS&format=json';
 
   // =========================================================================
@@ -135,11 +136,16 @@ const KalshiAgent = (() => {
 
   /**
    * Probability that Temperature > Strike (P(T > S)) given ensemble μ and σ.
+   * Koreksi Pembulatan Kalshi (+0.5°F):
+   * Syarat Kalshi > S butuh laporan METAR integer >= S + 1.
+   * Karena pembulatan METAR ke integer terdekat, suhu riil kontinu harus >= S + 0.5°F.
+   * Maka kalkulasi Z-score / Gaussian CDF menggunakan strikeEffective = strike + 0.5.
    */
   function calculateExceedanceProbability(strike, mean, stdDev) {
     if (stdDev <= 0) stdDev = 0.5;
-    const z = (strike - mean) / stdDev;
-    // P(T > S) = 1 - Φ((S - μ)/σ)
+    const strikeEffective = strike + 0.5;
+    const z = (strikeEffective - mean) / stdDev;
+    // P(T > S) = 1 - Φ((strikeEffective - μ)/σ)
     const prob = 1.0 - normalCDF(z);
     return Math.max(0.001, Math.min(0.999, prob));
   }
@@ -524,9 +530,9 @@ const KalshiAgent = (() => {
 
   /**
    * Determine Settlement Risk Zone:
-   * 🟢 SAFE ZONE (> 15 min)
-   * 🟡 HIGH VOLATILITY (5-15 min)
-   * 🔴 LOCK / NO-TRADE ZONE (< 5 min)
+   * 🟢 SAFE (> 15 min)
+   * 🟡 WARNING (5-15 min)
+   * 🔴 LOCKED (< 5 min)
    */
   function getSettlementRisk(closeTimeMs) {
     const diffMs = closeTimeMs - Date.now();
@@ -546,20 +552,40 @@ const KalshiAgent = (() => {
     } else if (totalMinutes >= 5) {
       return {
         zoneClass: 'risk-vol',
-        label: `🟡 VOLATILE [${formattedCountdown}]`,
+        label: `🟡 WARNING [${formattedCountdown}]`,
         countdown: formattedCountdown,
         minutes: totalMinutes,
-        status: 'VOLATILE'
+        status: 'WARNING'
       };
     } else {
       return {
         zoneClass: 'risk-lock',
-        label: `🔴 LOCK [${formattedCountdown}]`,
+        label: `🔴 LOCKED [${formattedCountdown}]`,
         countdown: formattedCountdown,
         minutes: totalMinutes,
-        status: 'LOCK'
+        status: 'LOCKED'
       };
     }
+  }
+
+  /**
+   * Format Market Hour in City Local Time
+   * Format contoh: "Target Hour: 02:00 - 03:00 Local Time [Current T]" or "[Next T+1]"
+   */
+  function formatMarketHour(city, closeTimeMs, horizonTag = 'Current T') {
+    const closeDate = new Date(closeTimeMs);
+    const openDate = new Date(closeTimeMs - 3600000);
+
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: city.tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+
+    const openStr = formatter.format(openDate);
+    const closeStr = formatter.format(closeDate);
+    return `Target Hour: ${openStr} - ${closeStr} Local Time [${horizonTag}]`;
   }
 
   /**
@@ -578,6 +604,8 @@ const KalshiAgent = (() => {
       const nextCloseMs = cityFeed ? cityFeed.nextCloseTimeMs : currentCloseMs + 3600000;
 
       const risk = getSettlementRisk(currentCloseMs);
+      const marketHourT = formatMarketHour(city, currentCloseMs, 'Current T');
+      const marketHourT1 = formatMarketHour(city, nextCloseMs, 'Next T+1');
 
       // Ensemble Stats
       const statsT = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
@@ -624,9 +652,13 @@ const KalshiAgent = (() => {
             <span class="station-badge">${city.icao}</span>
             <span class="series-tag">${city.seriesTicker}</span>
           </div>
-          <div class="settlement-risk-badge ${risk.zoneClass}">
+          <div class="settlement-risk-badge ${risk.zoneClass}" id="timer-${city.id}">
             ${risk.label}
           </div>
+        </div>
+
+        <div class="city-market-hour-banner">
+          <span class="hour-tag-current">${marketHourT}</span>
         </div>
 
         <div class="dual-horizon-container">
@@ -635,7 +667,7 @@ const KalshiAgent = (() => {
             <div class="horizon-header">
               <span class="horizon-title-tag">
                 <span>EXP:</span>
-                <span class="hour-tag">${currentHourLabel} (T)</span>
+                <span class="hour-tag">${currentHourLabel} [T]</span>
               </span>
               <span style="font-size:8px; font-family:var(--font-mono); color:var(--text-dim);">LIVE METAR</span>
             </div>
@@ -676,7 +708,7 @@ const KalshiAgent = (() => {
             <div class="horizon-header">
               <span class="horizon-title-tag">
                 <span>PRE:</span>
-                <span class="hour-tag">${nextHourLabel} (T+1)</span>
+                <span class="hour-tag">${nextHourLabel} [T+1]</span>
               </span>
               ${hasHotEntry ? `
                 <span class="badge-hot-entry">
@@ -689,8 +721,8 @@ const KalshiAgent = (() => {
 
             <div class="horizon-telemetry">
               <div>
-                <div class="telemetry-label">PRE-MARKET μ</div>
-                <div class="telemetry-val ai-forecast">${statsT1.mean}°F</div>
+                <div class="telemetry-label">${marketHourT1.replace('Target Hour: ', 'NEXT ')}</div>
+                <div class="telemetry-val ai-forecast">${statsT1.mean}°F <span style="font-size:8px; color:var(--text-dim); font-weight:normal;">(AI μ)</span></div>
               </div>
               <div style="text-align:right;">
                 <div class="telemetry-label">MAX EDGE</div>
@@ -788,6 +820,11 @@ const KalshiAgent = (() => {
     document.getElementById('modalStationBadge').textContent = city.icao;
     document.getElementById('modalCityName').textContent = city.name;
     document.getElementById('modalSeriesTicker').textContent = city.seriesTicker;
+
+    const modalHourEl = document.getElementById('modalMarketHour');
+    if (modalHourEl) {
+      modalHourEl.textContent = formatMarketHour(city, currentCloseMs, 'Current T');
+    }
 
     const riskBadge = document.getElementById('modalRiskBadge');
     riskBadge.className = `settlement-risk-badge ${risk.zoneClass}`;
@@ -1012,10 +1049,12 @@ const KalshiAgent = (() => {
       return height - 25 - (y / peak) * (height - 55);
     }
 
-    // 1. Draw Shaded Exceedance Area for P(T > Strike)
+    const strikeEffective = strike + 0.5;
+
+    // 1. Draw Shaded Exceedance Area for P(T >= Strike + 0.5°F)
     ctx.beginPath();
     let started = false;
-    for (let x = strike; x <= xMax; x += xRange / 100) {
+    for (let x = strikeEffective; x <= xMax; x += xRange / 100) {
       const cx = toCanvasX(x);
       const cy = toCanvasY(gaussian(x));
       if (!started) {
@@ -1063,8 +1102,8 @@ const KalshiAgent = (() => {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 5. Strike Marker Line (Cyan/Amber)
-    const strikeX = toCanvasX(strike);
+    // 5. Strike Effective Marker Line (Cyan/Amber)
+    const strikeX = toCanvasX(strikeEffective);
     ctx.beginPath();
     ctx.moveTo(strikeX, 10);
     ctx.lineTo(strikeX, height - 25);
@@ -1074,7 +1113,7 @@ const KalshiAgent = (() => {
 
     ctx.fillStyle = '#06b6d4';
     ctx.font = `${10 * (window.devicePixelRatio || 1)}px JetBrains Mono, monospace`;
-    ctx.fillText(`Strike: ${strike}°F`, strikeX + 5, 22);
+    ctx.fillText(`Strike Eff: ${strikeEffective}°F (>${strike}°)`, strikeX + 5, 22);
 
     // 6. METAR Live Station Needle (Bright Blue)
     if (metarTemp !== null && metarTemp !== undefined) {
@@ -1129,6 +1168,10 @@ const KalshiAgent = (() => {
     const clockEt = document.getElementById('clockEt');
     if (clockEt) clockEt.textContent = etFormatter.format(now);
 
+    // LIVE COUNTDOWN TIMER (DETIK):
+    // Real-time ticking every second for all 6 city card headers and open modal
+    updateCountdownTimers();
+
     // Check Auto-Rollover Trigger:
     // If any active contract expired (closeTime <= now), trigger immediate re-poll
     let needsRollover = false;
@@ -1142,6 +1185,39 @@ const KalshiAgent = (() => {
     if (needsRollover) {
       console.log('[Auto-Rollover Engine]: Period settlement detected. Rolling active contracts...');
       pollAllFeeds();
+    }
+  }
+
+  /**
+   * Real-time 1-second countdown timer for all city headers and modal
+   * SAFE (Hijau) > 15m | WARNING (Kuning) 5-15m | LOCKED (Merah) < 5m
+   */
+  function updateCountdownTimers() {
+    CITIES_CONFIG.forEach(city => {
+      const feed = state.kalshiMarkets[city.seriesTicker];
+      if (feed && feed.currentCloseTimeMs) {
+        const timerEl = document.getElementById(`timer-${city.id}`);
+        if (timerEl) {
+          const risk = getSettlementRisk(feed.currentCloseTimeMs);
+          timerEl.className = `settlement-risk-badge ${risk.zoneClass}`;
+          timerEl.textContent = risk.label;
+        }
+      }
+    });
+
+    if (state.activeModalCityId) {
+      const city = CITIES_CONFIG.find(c => c.id === state.activeModalCityId);
+      if (city) {
+        const feed = state.kalshiMarkets[city.seriesTicker];
+        if (feed && feed.currentCloseTimeMs) {
+          const modalRiskBadge = document.getElementById('modalRiskBadge');
+          if (modalRiskBadge) {
+            const risk = getSettlementRisk(feed.currentCloseTimeMs);
+            modalRiskBadge.className = `settlement-risk-badge ${risk.zoneClass}`;
+            modalRiskBadge.textContent = risk.label;
+          }
+        }
+      }
     }
   }
 
@@ -1190,28 +1266,106 @@ const KalshiAgent = (() => {
   // 9. LIFECYCLE & POLLING COORDINATOR
   // =========================================================================
 
+  /**
+   * Fast auto-refresh specifically for Kalshi orderbooks and live edge recalculation (every 3-5 seconds)
+   */
+  async function pollKalshiOrderbooksFast() {
+    try {
+      const tasks = CITIES_CONFIG.map(city => fetchKalshiSeriesMarkets(city));
+      await Promise.allSettled(tasks);
+
+      // Re-render dashboard cards with updated orderbook quotes and recalculate edge
+      renderDashboard();
+      updateTelemetryUi();
+
+      // If execution modal is open, live update its orderbook depth and trade ticket
+      updateModalDataLive();
+
+      const orderbookStatusEl = document.getElementById('orderbookPollStatus');
+      if (orderbookStatusEl) {
+        orderbookStatusEl.textContent = `LIVE (4s)`;
+      }
+    } catch (err) {
+      console.warn('[Fast Orderbook Poll Error]:', err);
+    }
+  }
+
+  /**
+   * Live update for open Execution Modal without resetting user interaction
+   */
+  function updateModalDataLive() {
+    if (!state.activeModalCityId) return;
+    const city = CITIES_CONFIG.find(c => c.id === state.activeModalCityId);
+    if (!city) return;
+
+    const cityFeed = state.kalshiMarkets[city.seriesTicker];
+    const metar = state.metarData[city.icao] || { tempF: null, tempC: null };
+    const currentCloseMs = cityFeed ? cityFeed.currentCloseTimeMs : Date.now() + 1800000;
+    const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
+    const risk = getSettlementRisk(currentCloseMs);
+
+    const modalHourEl = document.getElementById('modalMarketHour');
+    if (modalHourEl) {
+      modalHourEl.textContent = formatMarketHour(city, currentCloseMs, 'Current T');
+    }
+
+    const riskBadge = document.getElementById('modalRiskBadge');
+    if (riskBadge) {
+      riskBadge.className = `settlement-risk-badge ${risk.zoneClass}`;
+      riskBadge.textContent = risk.label;
+    }
+
+    const markets = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
+      evaluateMarketMetrics(city, m, currentCloseMs)
+    ).filter(m => m.isRational).sort((a, b) => a.strike - b.strike);
+
+    let activeStrikeObj = null;
+    if (state.selectedStrikeTicker) {
+      activeStrikeObj = markets.find(m => m.ticker === state.selectedStrikeTicker);
+    }
+    if (!activeStrikeObj) {
+      activeStrikeObj = markets.find(m => Math.abs(m.edgeYes) >= 0.05) || markets[0];
+      if (activeStrikeObj) state.selectedStrikeTicker = activeStrikeObj.ticker;
+    }
+
+    if (activeStrikeObj) {
+      const activeStrikeEl = document.getElementById('modalActiveStrike');
+      if (activeStrikeEl) activeStrikeEl.textContent = `>${activeStrikeObj.strike}°F`;
+      renderModalStrikesTable(city, markets, activeStrikeObj);
+      renderModalOrderbook(city, activeStrikeObj);
+      renderTradeTicket(city, activeStrikeObj, stats);
+      drawDistributionCurve(stats.mean, stats.stdDev, metar.tempF, activeStrikeObj.strike);
+    }
+  }
+
+  /**
+   * Slower polling for heavier external weather data (METAR & Google WeatherNext AI)
+   */
+  async function pollWeatherFeeds() {
+    try {
+      await fetchMetarReadings();
+      const tasks = CITIES_CONFIG.map(city => fetchWeatherNextEnsemble(city));
+      await Promise.allSettled(tasks);
+      renderDashboard();
+      updateTelemetryUi();
+      updateModalDataLive();
+    } catch (err) {
+      console.error('[Weather Feed Error]:', err);
+    }
+  }
+
   async function pollAllFeeds() {
     try {
-      // 1. Fetch Ground Truth METAR for all stations
       await fetchMetarReadings();
-
-      // 2. Concurrently fetch WeatherNext Ensemble & Kalshi Markets for 6 cities
       const tasks = [];
       CITIES_CONFIG.forEach(city => {
         tasks.push(fetchWeatherNextEnsemble(city));
         tasks.push(fetchKalshiSeriesMarkets(city));
       });
-
       await Promise.allSettled(tasks);
-
-      // 3. Refresh Dashboard & Telemetry
       renderDashboard();
       updateTelemetryUi();
-
-      // 4. Update modal if open
-      if (state.activeModalCityId) {
-        openDetailExecutionModal(state.activeModalCityId);
-      }
+      updateModalDataLive();
     } catch (err) {
       console.error('[Feed Coordinator Error]:', err);
     }
@@ -1249,15 +1403,18 @@ const KalshiAgent = (() => {
       }
     });
 
-    // Start Real-Time Clocks (1s interval)
+    // Start Real-Time Clocks & 1-second Countdown Timers
     updateClocks();
     setInterval(updateClocks, 1000);
 
-    // Initial Data Fetch
+    // Initial Full Data Fetch
     pollAllFeeds();
 
-    // Setup 30s Polling Loop
-    setInterval(pollAllFeeds, POLLING_INTERVAL_MS);
+    // Fast Polling Loop (4s): Kalshi CLOB Orderbook quotes & Live Edge Recalculation
+    setInterval(pollKalshiOrderbooksFast, ORDERBOOK_POLL_INTERVAL_MS);
+
+    // Standard Polling Loop (30s): Heavier Weather feeds (METAR Ground Truth & WeatherNext AI)
+    setInterval(pollWeatherFeeds, POLLING_INTERVAL_MS);
   }
 
   // Auto initialize on DOMContentLoaded
