@@ -1,166 +1,161 @@
-# AURA-WX PRO: Institutional Weather Prediction Market Terminal & AI Trading Agent
+# AURA-WX TERMINAL // KALSHI QUANTITATIVE WEATHER AGENT
 
-[![Platform](https://img.shields.io/badge/platform-Kalshi%20%7C%20Polymarket-06b6d4.svg)](#)
-[![Data Engine](https://img.shields.io/badge/weather%20framework-Google%20WeatherNext%203-10b981.svg)](#)
-[![Architecture](https://img.shields.io/badge/architecture-Zero--Lag%20Reactive%20CLOB-6366f1.svg)](#)
-[![Design](https://img.shields.io/badge/theme-Dark%20Fintech%20Obsidian-f59e0b.svg)](#)
-[![TypeScript](https://img.shields.io/badge/typescript-v5.7%2B-blue.svg)](#)
+[![Platform](https://img.shields.io/badge/Exchange-Kalshi%20CLOB-06b6d4.svg)](#)
+[![Forecast AI](https://img.shields.io/badge/AI%20Model-Google%20WeatherNext%203%20(64%20Members)-10b981.svg)](#)
+[![Ground Truth](https://img.shields.io/badge/Ground%20Truth-METAR%2FASOS%20Live%20Lock-38bdf8.svg)](#)
+[![Architecture](https://img.shields.io/badge/Viewport-100vh%20Single--Screen%20Locked-8b5cf6.svg)](#)
+[![License](https://img.shields.io/badge/License-MIT-gray.svg)](#)
 
-> **AURA-WX PRO** is a production-grade institutional trading terminal and autonomous AI execution agent for hourly weather prediction markets (targeting **Kalshi** binary contracts and **Polymarket** USDC order books across 5 core metro centers: **Chicago, New York, Los Angeles, Miami, and Austin**).
+> **AURA-WX TERMINAL** is an institutional-grade, real-time quantitative trading terminal and AI forecasting agent purpose-built exclusively for **Kalshi Hourly Directional Temperature Markets** across 6 core US metropolitan centers. Powered by the **Google WeatherNext 3 AI Ensemble** and live **METAR/ASOS Ground Truth**, it detects orderbook mispricings, projects upcoming $T+1$ strikes, and provides instant edge calculation for high-confidence manual execution.
 
 ---
 
-## Architecture Overview
+## 🏛️ System Architecture
 
+```mermaid
+flowchart TD
+    subgraph DataFeeds["Dual Real-Time Data Feeds"]
+        WN["Google WeatherNext 3 Ensemble<br/>(Open-Meteo 64 Members)"]
+        METAR["Aviation Weather METAR/ASOS<br/>(KMIA, KLAX, KMDW, KJFK, KDCA, KAUS)"]
+        KALSHI["Kalshi Trade API v2 CLOB<br/>(KXTEMPMIAH, KXTEMPLAXH, etc.)"]
+    end
+
+    subgraph QuantEngine["Kalshi Quantitative Math Engine (app.js)"]
+        STAT["Ensemble Mean μ & Spread σ"]
+        CDF["Gaussian CDF Exceedance: P(T > S)"]
+        LOCK["Ground Truth Reality Override (100% Lock)"]
+        EDGE["Edge Analysis vs Kalshi Asks:<br/>Edge_YES = P_model - P_kalshi,YES<br/>Edge_NO = (1 - P_model) - P_kalshi,NO"]
+        HOT["Pre-Market Hot Entry Detector (Edge > 15%)"]
+        ROLL["Dynamic Auto-Rollover Engine (T ➔ T+1)"]
+    end
+
+    subgraph TerminalUI["Institutional Terminal UI (100vh Locked)"]
+        TOP["System Top Bar (5vh): Dual Clock WIB/ET, Telemetry, Theme Toggle"]
+        GRID["3x2 Metro Grid (95vh): Miami, Los Angeles, Chicago, New York, DC, Austin"]
+        CARD["Dual-Horizon City Card: Current Hour (T) | Next Hour Pre-Market (T+1)"]
+        MODAL["Execution Modal: Orderbook Depth Ladder + Canvas Bell Curve + Trade Ticket"]
+    end
+
+    WN --> STAT
+    STAT --> CDF
+    METAR --> LOCK
+    KALSHI --> EDGE
+    CDF --> EDGE
+    LOCK --> EDGE
+    EDGE --> HOT
+    KALSHI --> ROLL
+    ROLL --> UI
+    HOT --> CARD
+    CARD --> MODAL
+    TOP --> TerminalUI
+    GRID --> TerminalUI
 ```
-                                  ┌─────────────────────────────────────────┐
-                                  │   Google WeatherNext 3 Data Framework   │
-                                  │  (GraphCast AI + HRRR + ECMWF Ensemble) │
-                                  └────────────────────┬────────────────────┘
-                                                       │
-                                                       ▼
-┌─────────────────────────────────┐       ┌─────────────────────────┐       ┌─────────────────────────────────┐
-│       Kalshi Binary CLOB        │       │   Quantitative Engine   │       │     Polymarket Outcome CLOB     │
-│    (1¢ - 99¢ USD Contracts)     │◄─────►│    - Normal/Skew CDF    │◄─────►│     (USDC Outcome Tokens)       │
-│  - KXCHID, KXNYCD, KXLAXD, etc. │       │    - Expected Value (EV)│       │  - POLY-ORD, POLY-NYC, etc.     │
-└────────────────┬────────────────┘       │    - Half-Kelly Sizing  │       └────────────────┬────────────────┘
-                 │                        │    - Arbitrage Detector │                        │
-                 │                        └────────────┬────────────┘                        │
-                 │                                     │                                     │
-                 ▼                                     ▼                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                       WeatherMarket Central State Store                                      │
-│                (Active Period Rollover Engine, Live Micro-Ticks, Risk & Portfolio Accounting)                │
-└──────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘
-                                                       │
-                           ┌───────────────────────────┴───────────────────────────┐
-                           ▼                                                       ▼
-        ┌─────────────────────────────────────┐                 ┌─────────────────────────────────────┐
-        │        Desktop Terminal (PC)        │                 │       Mobile Terminal (Android)     │
-        │ - Persistent Bloomberg Navigation   │                 │ - Sticky Bottom Nav Bar             │
-        │ - Top Telemetry & Global Countdown  │                 │ - Horizontal Swipeable City Strip   │
-        │ - Dual CLOB Depth Ladders           │                 │ - Single-Column High-Density Cards  │
-        └─────────────────────────────────────┘                 └─────────────────────────────────────┘
-```
 
 ---
 
-## 1. Layout & Navigation Structure (PC & Android Optimized)
+## 📍 6 Target Metro Centers & Kalshi Series Tickers
 
-### Desktop Terminal (PC)
-- **Persistent Sidebar Navigation**: Fast navigation between the 4 core workspaces, quick city switcher pills displaying real-time ASOS temperature and dominant edge direction, and real-time AI Agent state.
-- **Top Telemetry Bar**: Real-time system health badge, API latencies (Kalshi ~14ms, Polymarket ~22ms, Google WeatherNext 3 ~8ms), global live countdown timer to the hourly boundary (`HH:00:00`), clock speed accelerator (`1x`, `10x`, `60x`), manual rollover trigger, and portfolio equity.
-- **Multi-Column Financial Grid**: Side-by-side CLOB order book depth ladders, live trade tapes, interactive SVG Gaussian probability curves, and active position cards.
+The terminal monitors 6 primary meteorological hubs using official Kalshi Series Tickers and official ICAO airport station readings:
 
-### Mobile Terminal (Android & Touch Devices)
-- **Sticky Bottom Navigation Bar**: Quick-switch tabs (`Command`, `Intel`, `Deep-Dive`, `Agent/Logs`) with dynamic badge counters.
-- **Horizontal Swipeable City Strip**: Smooth horizontal scroll bar for switching between Chicago (ORD), New York (NYC), Los Angeles (LAX), Miami (MIA), and Austin (AUS) with zero layout shifts.
-- **Single-Column High-Density Cards**: Optimized for 60 FPS touch interaction, thumb-friendly execution buttons, and high-contrast numbers.
-
----
-
-## 2. The 4 Navigation Menu Tabs
-
-1. **`Live Command`**:
-   - Multi-city real-time CLOB order book for the active temperature strike bracket.
-   - Dual exchange depth ladders (Kalshi USD vs Polymarket USDC) with cumulative volume visualization.
-   - Live Odds comparison bar and real-time Cross-Market Arbitrage notice.
-   - Real-time executed trades tape and active positions manager with 1-click exit.
-
-2. **`Pre-Market Intel`**:
-   - Dedicated pre-opening calculation engine & edge matrix.
-   - Computes Expected Value (EV) for BOTH `YES` and `NO` options across every single temperature tier.
-   - Statistical Asymmetry Heatmap highlighting the top 3 highest-probability alpha opportunities.
-   - 1-Click "STAGE" order ticket with automated Kelly sizing and batch execution.
-
-3. **`City Deep-Dive`**:
-   - Interactive SVG Gaussian & skew-normal probability curve with temperature bracket demarcations and live temperature pin marker.
-   - 5-member Google WeatherNext 3 ensemble variance breakdown (`WeatherNext_3`, `HRRR_CONUS`, `ECMWF_HRES`, `GFS_FV3`, `AI_Neural_Blend`).
-   - Granular atmospheric sensor telemetry: Dew Point, Relative Humidity, Barometric Pressure trend, Wind velocity, Solar Radiation, and simulated Radar Reflectivity (dBZ).
-   - Historical Brier accuracy calibration score (`0.074`).
-
-4. **`Agent Config / Logs`**:
-   - Autonomous AI execution agent controls: Min EV hurdle %, Half-Kelly multiplier, Max position size ($), Stop-loss %, Take-profit %, and Auto-hedge arbitrage toggle.
-   - Real-time API connectivity status & WebSocket latency monitors.
-   - Filterable system audit logs with JSON payload inspector.
-   - Portfolio performance analytics: Sharpe ratio, Win rate %, Realized PnL, Max Drawdown.
+| City | Kalshi Series Ticker | METAR Station | Coordinates | Timezone |
+| :--- | :--- | :--- | :--- | :--- |
+| **Miami** | `KXTEMPMIAH` | KMIA (Miami Intl) | 25.7959° N, 80.2870° W | America/New_York (EDT) |
+| **Los Angeles** | `KXTEMPLAXH` | KLAX (Los Angeles Intl) | 33.9425° N, 118.4081° W | America/Los_Angeles (PDT) |
+| **Chicago** | `KXTEMPCHIH` | KMDW (Midway Intl) | 41.7868° N, 87.7522° W | America/Chicago (CDT) |
+| **New York** | `KXTEMPNYCH` | KJFK (John F. Kennedy Intl) | 40.6413° N, 73.7781° W | America/New_York (EDT) |
+| **Washington DC** | `KXTEMPDCH` | KDCA (Ronald Reagan Natl) | 38.8512° N, 77.0402° W | America/New_York (EDT) |
+| **Austin** | `KXTEMPAUSH` | KAUS (Austin-Bergstrom Intl) | 30.1975° N, 97.6664° W | America/Chicago (CDT) |
 
 ---
 
-## 3. Quantitative Financial & Atmospheric Mathematics
+## 🧮 Quantitative Formulation & Engine Rules
 
-### Cumulative Temperature Probability
-Given ensemble mean $\mu$, standard deviation $\sigma$, and skewness $\gamma$, the probability that the final ASOS station reading falls within bracket $[T_1, T_2]$ is:
+### 1. Google WeatherNext 3 Ensemble Engine
+The forecasting engine queries 64 ensemble forecast members of the Google WeatherNext model via Open-Meteo to calculate distribution parameters for any target hour $T$:
+- **Mean Temperature ($\mu$)**:
+  $$\mu = \frac{1}{M}\sum_{i=1}^M T_i$$
+- **Dynamic Spread / Standard Deviation ($\sigma$)**:
+  $$\sigma = \max\left(0.5^\circ\text{F}, \sqrt{\frac{1}{M-1}\sum_{i=1}^M (T_i - \mu)^2}\right)$$
 
-$$P(T_1 \le T < T_2) = \Phi\left(\frac{T_2 - \mu}{\sigma}\right) - \Phi\left(\frac{T_1 - \mu}{\sigma}\right)$$
+### 2. Gaussian Cumulative Distribution Function (CDF)
+For any active Kalshi strike $S$ (contract payout if $T > S$):
+$$P(T > S) = 1 - \Phi\left(\frac{S - \mu}{\sigma}\right) = 1 - \frac{1}{2}\left[1 + \text{erf}\left(\frac{S - \mu}{\sigma \sqrt{2}}\right)\right]$$
+where $\text{erf}(x)$ is computed via high-precision numerical approximation ($|\epsilon| < 1.5 \times 10^{-7}$).
 
-where $\Phi(z) = \frac{1}{2}\left[1 + \text{erf}\left(\frac{z}{\sqrt{2}}\right)\right]$.
+### 3. METAR Ground Truth Reality Lock
+Official METAR/ASOS readings are retrieved continuously from AviationWeather.gov:
+- If current station temperature $T_{\text{METAR}} \ge S$ before the settlement window closes:
+  $$P(T > S) \equiv 1.00 \quad (100\%\text{ Reality Lock})$$
+  The contract outcome is locked and indicated visually with a 🔒 badge.
 
-### Expected Value (EV)
-For binary contracts settled at $\$1.00$ or $\$0.00$ purchased at ask price $p$:
+### 4. Kalshi CLOB Edge Analysis
+Model probabilities are matched against real-time Kalshi orderbook asks:
+$$\text{Edge}_{\text{YES}} = P_{\text{model}} - P_{\text{kalshi, YES}}$$
+$$\text{Edge}_{\text{NO}} = (1 - P_{\text{model}}) - P_{\text{kalshi, NO}}$$
+where $P_{\text{kalshi, YES}} = \text{Ask}_{\text{YES}} / 100$ and $P_{\text{kalshi, NO}} = \text{Ask}_{\text{NO}} / 100$.
 
-$$\text{EV}_{\text{YES}} = P_{\text{model}} \cdot (1 - p_{\text{YES}}) - (1 - P_{\text{model}}) \cdot p_{\text{YES}} = P_{\text{model}} - p_{\text{YES}}$$
-
-$$\text{EV}_{\text{NO}} = (1 - P_{\text{model}}) \cdot (1 - p_{\text{NO}}) - P_{\text{model}} \cdot p_{\text{NO}} = (1 - P_{\text{model}}) - p_{\text{NO}}$$
-
-### Fractional Kelly Criterion
-Optimal bankroll allocation fraction $f^*$ with quarter-Kelly dampening ($0.25\times$) for drawdown control:
-
-$$f^* = \text{clamp}\left( \frac{P_{\text{model}} - p}{1 - p} \times 0.25, \; 0, \; 0.15 \right)$$
-
-### Cross-Market Arbitrage Condition
-If the best ask for YES on Platform A plus the best ask for NO on Platform B is less than $\$0.985$:
-
-$$\text{Ask}_{\text{YES}, A} + \text{Ask}_{\text{NO}, B} < 0.985 \implies \text{Guaranteed Synthetic Profit} \ge 1.5\%$$
-
----
-
-## 4. Core Cities & Station Coverage
-
-| City | Station Code | Location | Elev (ft) | Primary Climate Dynamics |
-| :--- | :---: | :--- | :---: | :--- |
-| **Chicago** | `KORD` | O'Hare Intl Airport, IL | 672 | Lake Michigan breeze frontal boundary |
-| **New York** | `KNYC` | Central Park Station, NY | 130 | Urban heat island & Atlantic sea breeze |
-| **Los Angeles** | `KLAX` | Los Angeles Intl, CA | 125 | Marine layer low stratus & coastal inversions |
-| **Miami** | `KMIA` | Miami Intl Airport, FL | 9 | Tropical convection & sea-breeze convergence |
-| **Austin** | `KAUS` | Bergstrom / Camp Mabry, TX | 542 | Texas dryline & diurnal radiative heating |
+### 5. Half-Kelly Position Sizing
+Recommended capital allocation per trade:
+$$f^* = \frac{p(b + 1) - 1}{b} \times 0.5$$
+where $b = (100 - \text{Ask}) / \text{Ask}$. Sizing is capped at 25% to respect institutional portfolio drawdowns.
 
 ---
 
-## 5. Local Setup & Production Deployment
+## 🔮 Pre-Market Predictor ($T+1$) & Hot Entry Detector
 
-### Prerequisites
-- Node.js v20+ or [Bun](https://bun.sh)
-- npm or bun
+Each city card features a **Dual-Time Horizon Panel**:
+- **Current Hour ($T$)**: Live METAR Ground Truth, active Kalshi ladder, settlement countdown timer, and active Edge matrix.
+- **Next Hour ($T+1$)**: Google WeatherNext AI mean temperature forecast, ensemble standard deviation, and upcoming strike probability projections.
+- **⚡ PRE-MARKET HOT ENTRY**: When Kalshi opens the $T+1$ orderbook, initial quotes are immediately evaluated against the AI theoretical model. If a mispricing of **$\text{Edge} \ge 15\%$** is discovered, the card illuminates with a glowing badge:
+  `⚡ PRE-MARKET HOT ENTRY`
 
-### Local Development
+---
+
+## ⏱️ Settlement Risk Zones & Dynamic Auto-Rollover
+
+The terminal enforces strict trade discipline based on settlement proximity:
+- 🟢 **SAFE ZONE** ($> 15$ minutes to settlement): Full trade execution permitted.
+- 🟡 **HIGH VOLATILITY** ($5 - 15$ minutes to settlement): Rapid price convergence; reduce position sizing.
+- 🔴 **LOCK / NO-TRADE ZONE** ($< 5$ minutes to settlement): Trading halted to protect capital from settlement freezes.
+
+**Anti-Stuck Dynamic Rollover**: When the current hour contract reaches settlement, the engine seamlessly rolls the active trading view to $T+1$ without requiring page reload or manual URL inputs.
+
+---
+
+## 🖥️ Institutional UI & Single-Screen Viewport Lock
+
+- **100vh Viewport Lock**: Engineered with strict CSS view constraints (`height: 100vh; overflow: hidden;` on desktop $\ge 1024\text{px}$) so all 6 cities, live feeds, and upcoming predictions are visible simultaneously without scrolling.
+- **System Top Bar**: Dynamic dual clocks comparing local Western Indonesia Time (**WIB**) against Market Time (**ET**), feed telemetry indicators, and theme toggle.
+- **Dark Obsidian & High-Contrast Light Themes**: Instant switching between institutional fintech dark mode and crisp daytime light mode.
+- **Detail Execution Modal**: Clicking any city opens an orderbook depth ladder, real-time Canvas distribution bell curve with METAR needle pin, and a direct one-click trade execution ticket.
+
+---
+
+## 🚀 Deployment & Local Preview
+
+This project is a standalone, client-side web application ready for deployment on **GitHub Pages**, **Vercel**, or local hosting.
+
+### Local Run:
 ```bash
-# Clone the repository
-git clone https://github.com/rabapuba/polymarket-feed-pro.git
-cd polymarket-feed-pro
+# Clone repository
+git clone https://github.com/rabapuba/aura-wx-terminal.git
+cd aura-wx-terminal
 
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
+# Launch local HTTP server
+python3 -m http.server 3000
 ```
-Navigate to `http://localhost:5173`.
-
-### Production Build
-```bash
-npm run build
-```
-Generates an optimized bundle in `dist/`.
-
-### Deployment to Vercel / Cloudflare Pages / Custom Domain
-1. Connect your GitHub repository to [Vercel](https://vercel.com) or [Cloudflare Pages](https://pages.cloudflare.com).
-2. Framework Preset: **Vite**.
-3. Build Command: `npm run build`.
-4. Output Directory: `dist`.
-5. Add your custom domain under **Project Settings > Domains**.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## License
-MIT License. Built for high-frequency quantitative prediction market analytics.
+## 🛡️ Script Encapsulation & Security
+
+All execution logic is strictly encapsulated inside the isolated module `KalshiAgent`:
+- Zero private state or credentials leaked to `window` console.
+- Multi-tier proxy fallback architecture ensures continuous uptime even behind restrictive CORS configurations.
+- Automatic off-market strike filtering removes dead quotes ($0¢$ or $100¢$ with zero depth).
+
+---
+
+## ⚖️ License
+MIT License © 2026 Rabapuba Quantitative Engineering.

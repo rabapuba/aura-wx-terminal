@@ -1,19 +1,213 @@
-<!doctype html>
-<html lang="en" class="dark" notranslate translate="no">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌤️</text></svg>" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f141c" />
-    <meta name="description" content="Aura WX Terminal - Institutional Daily High Temperature (TMAX) Prediction Markets & AI Trading Dashboard (Kalshi & Polymarket)" />
-    <title>Aura WX Terminal | Daily High Temperature Prediction Markets</title>
-    <!-- Fonts: Inter & JetBrains Mono -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  </head>
-  <body class="bg-slate-50 dark:bg-[#0f141c] text-slate-900 dark:text-slate-100 antialiased selection:bg-sky-500/30 selection:text-sky-200 overflow-x-hidden transition-colors">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AURA-WX // Kalshi Quantitative Weather Agent</title>
+  <meta name="description" content="Institutional Real-Time Kalshi Quantitative Weather Terminal & Pre-Market Predictor powered by Google WeatherNext 3 AI and METAR Ground Truth.">
+  <link rel="icon" type="image/svg+xml" href="public/favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- =====================================================================
+       TOP SYSTEM BAR (~5vh / 44px)
+       ===================================================================== -->
+  <header class="top-bar">
+    <div class="top-bar-left">
+      <div class="brand-badge">
+        <svg class="brand-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+          <path d="M12 13v6"/>
+          <path d="M9 16l3 3 3-3"/>
+        </svg>
+        <span>AURA-WX</span>
+        <span class="brand-sub">KALSHI QUANT TERMINAL</span>
+      </div>
+
+      <div class="time-sync-box">
+        <div class="time-pill">
+          <span class="time-label">WIB:</span>
+          <span class="time-value" id="clockWib">--:--:--</span>
+        </div>
+        <span style="color: var(--border-strong);">|</span>
+        <div class="time-pill">
+          <span class="time-label">MARKET (ET):</span>
+          <span class="time-value" id="clockEt">--:--:--</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="top-bar-center">
+      <div class="telemetry-strip">
+        <div class="telemetry-item" title="Kalshi Trade API v2 Feed Status">
+          <span class="status-dot active" id="dotKalshi"></span>
+          <span>KALSHI CLOB: <b id="statusKalshi" style="color:var(--text-main);">SYNCING</b></span>
+        </div>
+        <div class="telemetry-item" title="Aviation Weather METAR/ASOS Feed">
+          <span class="status-dot active" id="dotMetar"></span>
+          <span>METAR GROUND TRUTH: <b id="statusMetar" style="color:var(--text-main);">ONLINE</b></span>
+        </div>
+        <div class="telemetry-item" title="Google WeatherNext 3 AI Ensemble">
+          <span class="status-dot active" id="dotWn"></span>
+          <span>WEATHERNEXT AI: <b id="statusWn" style="color:var(--text-main);">64-MEMBERS</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="top-bar-right">
+      <div id="rolloverIndicator" style="display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--kalshi-cyan);">
+        <span class="status-dot" style="background:var(--kalshi-cyan);"></span>
+        <span>AUTO-ROLLOVER: <b>ACTIVE</b></span>
+      </div>
+      <button class="theme-toggle-btn" id="themeToggleBtn" aria-label="Toggle Theme">
+        <span id="themeIcon">☀️</span>
+        <span id="themeLabel">LIGHT</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- =====================================================================
+       MAIN VIEWPORT: 3x2 CITIES GRID (100vh Locked)
+       ===================================================================== -->
+  <main class="terminal-main">
+    <div class="cities-grid" id="citiesGrid">
+      <!-- 6 City Cards rendered dynamically by KalshiAgent -->
+      <div style="grid-column: 1 / -1; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-family:var(--font-mono); font-size:12px;">
+        INITIALIZING KALSHI QUANTITATIVE ENGINES (MIAMI, LA, CHICAGO, NYC, DC, AUSTIN)...
+      </div>
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       FULL DETAIL EXECUTION MODAL
+       ===================================================================== -->
+  <div class="modal-backdrop" id="executionModalBackdrop" role="dialog" aria-modal="true">
+    <div class="modal-container">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="station-badge" id="modalStationBadge">KMIA</span>
+          <span class="modal-city-name" id="modalCityName">Miami, FL</span>
+          <span class="series-tag" id="modalSeriesTicker">KXTEMPMIAH</span>
+          <div class="settlement-risk-badge" id="modalRiskBadge">🟢 SAFE ZONE</div>
+        </div>
+        <button class="modal-close-btn" id="modalCloseBtn" aria-label="Close modal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Left Panel: Gaussian Curve & Strike Analysis -->
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div class="modal-section">
+            <div class="section-title">
+              <span>Google WeatherNext AI Ensemble Distribution vs Settlement Threshold</span>
+              <span id="modalEnsembleSummary" style="color:var(--kalshi-cyan); font-family:var(--font-mono); font-size:10px;">μ=87.4°F | σ=1.2°F</span>
+            </div>
+            <div class="chart-box">
+              <canvas id="distributionChartCanvas"></canvas>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:9.5px; font-family:var(--font-mono); color:var(--text-dim);">
+              <span>🔵 METAR Reading: <b id="modalMetarTemp" style="color:#38bdf8;">--°F</b></span>
+              <span>🟣 Ensemble Mean: <b id="modalModelMean" style="color:#a855f7;">--°F</b></span>
+              <span>⚡ Active Strike: <b id="modalActiveStrike" style="color:var(--text-main);">--°F</b></span>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <div class="section-title">
+              <span>Active Kalshi Strikes & Edge Matrix</span>
+              <span style="font-size:9px; color:var(--text-dim);">Formula: Edge_YES = P_model - P_kalshi</span>
+            </div>
+            <div style="max-height: 170px; overflow-y:auto;">
+              <table class="micro-strike-table" id="modalStrikesTable">
+                <thead>
+                  <tr>
+                    <th>Strike</th>
+                    <th>Kalshi Bid</th>
+                    <th>Kalshi Ask</th>
+                    <th>Model Prob</th>
+                    <th>Edge YES</th>
+                    <th>Edge NO</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="modalStrikesTableBody">
+                  <!-- Injected via JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel: Live Orderbook Depth & Execution Ticket -->
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div class="modal-section">
+            <div class="section-title">
+              <span>Kalshi Orderbook Depth Ladder</span>
+              <span id="modalOrderbookTicker" style="font-family:var(--font-mono); font-size:9.5px; color:var(--kalshi-cyan);">--</span>
+            </div>
+            <div style="max-height: 160px; overflow-y:auto;">
+              <table class="orderbook-table">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;">Side</th>
+                    <th>Price</th>
+                    <th>Shares</th>
+                    <th>Total ($)</th>
+                  </tr>
+                </thead>
+                <tbody id="modalOrderbookBody">
+                  <!-- Injected via JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Trade Ticket -->
+          <div class="ticket-container">
+            <div class="section-title">
+              <span>Institutional Quantitative Recommendation</span>
+              <span style="font-size:9px; color:var(--color-safe);">REAL-MONEY MANUAL EXECUTION</span>
+            </div>
+
+            <div class="ticket-recommendation-banner" id="modalRecBanner">
+              <span id="modalRecText">EVALUATING SPREAD...</span>
+              <span id="modalRecEdge" style="font-size:14px;">+0%</span>
+            </div>
+
+            <div class="ticket-details-grid">
+              <div class="ticket-stat-box">
+                <div class="ticket-stat-label">Target Ask</div>
+                <div class="ticket-stat-val" id="ticketAskPrice">--¢</div>
+              </div>
+              <div class="ticket-stat-box">
+                <div class="ticket-stat-label">Model Prob</div>
+                <div class="ticket-stat-val" id="ticketModelProb">--%</div>
+              </div>
+              <div class="ticket-stat-box">
+                <div class="ticket-stat-label">Half-Kelly Size</div>
+                <div class="ticket-stat-val" id="ticketKellySize" style="color:var(--kalshi-cyan);">--%</div>
+              </div>
+            </div>
+
+            <a class="kalshi-direct-link-btn" id="modalKalshiTradeBtn" href="https://kalshi.com" target="_blank" rel="noopener noreferrer">
+              <span>EXECUTE DIRECTLY ON KALSHI</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
 </html>

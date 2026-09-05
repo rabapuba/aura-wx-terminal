@@ -1,33 +1,22 @@
 {
-  "name": "polymarket-feed-pro",
+  "name": "aura-wx-terminal",
+  "version": "2.0.0",
+  "description": "Production-grade Kalshi Quantitative Weather Trading Terminal & Pre-Market Predictor powered by Google WeatherNext 3 AI and METAR Ground Truth.",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "start": "python3 -m http.server 3000",
+    "preview": "python3 -m http.server 3000"
   },
-  "dependencies": {
-    "clsx": "^2.1.1",
-    "lightweight-charts": "^5.2.1",
-    "lucide-react": "^1.40.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tailwind-merge": "^3.6.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.4.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.1.0",
-    "autoprefixer": "^10.5.4",
-    "oxlint": "^1.79.0",
-    "postcss": "^8.5.28",
-    "tailwindcss": "^4.3.3",
-    "typescript": "~6.0.2",
-    "vite": "^8.2.2"
-  }
+  "keywords": [
+    "kalshi",
+    "weather-derivatives",
+    "quantitative-finance",
+    "google-weathernext",
+    "metar",
+    "orderbook-clob",
+    "pre-market-predictor"
+  ],
+  "author": "Rabapuba Quantitative Engineering",
+  "license": "MIT"
 }
