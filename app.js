@@ -430,6 +430,25 @@ const KalshiAgent = (() => {
     const centerInt = Math.round(centerTemp);
     const strikes = [];
 
+    const cityNameShort = city.name.split(',')[0].trim();
+    let timeLabel = '';
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: city.tz,
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true,
+        timeZoneName: 'short'
+      }).formatToParts(new Date(closeTimeMs));
+      const hour = parts.find(p => p.type === 'hour')?.value || '';
+      const minute = parts.find(p => p.type === 'minute')?.value || '00';
+      const dayPeriod = (parts.find(p => p.type === 'dayPeriod')?.value || '').toLowerCase();
+      const tzName = parts.find(p => p.type === 'timeZoneName')?.value || '';
+      timeLabel = (minute === '00' ? `${hour}${dayPeriod}` : `${hour}:${minute}${dayPeriod}`) + (tzName ? ` ${tzName}` : '');
+    } catch (e) {
+      timeLabel = 'today';
+    }
+
     for (let offset = -4; offset <= 4; offset++) {
       const strikeVal = centerInt + offset;
       const strikeFloor = strikeVal - 0.01;
@@ -448,7 +467,8 @@ const KalshiAgent = (() => {
         ticker: `${city.seriesTicker}-T${strikeFloor.toFixed(2)}`,
         floor_strike: strikeFloor,
         strike_val: strikeVal,
-        title: `Will the temp in ${city.name} be above ${strikeFloor}°?`,
+        event_title: `Temperature in ${cityNameShort} today at ${timeLabel}`,
+        title: `Will the temp in ${cityNameShort} be above ${strikeFloor}° on today at ${timeLabel}?`,
         yes_bid_dollars: (yesBid / 100).toFixed(4),
         yes_ask_dollars: (yesAsk / 100).toFixed(4),
         no_bid_dollars: (noBid / 100).toFixed(4),
@@ -508,6 +528,8 @@ const KalshiAgent = (() => {
       strike,
       rawStrike,
       ticker: market.ticker,
+      title: market.title || '',
+      event_title: market.event_title || '',
       modelProb,
       pKalshiYes,
       pKalshiNo,
@@ -520,7 +542,9 @@ const KalshiAgent = (() => {
       isCrossedReality,
       isRational,
       hasLiquidity,
-      halfKelly: calculateHalfKelly(modelProb, Math.round(pKalshiYes * 100))
+      halfKelly: calculateHalfKelly(modelProb, Math.round(pKalshiYes * 100)),
+      halfKellyYes: calculateHalfKelly(modelProb, Math.round(pKalshiYes * 100)),
+      halfKellyNo: calculateHalfKelly(1.0 - modelProb, Math.round(pKalshiNo * 100))
     };
   }
 
@@ -589,6 +613,54 @@ const KalshiAgent = (() => {
   }
 
   /**
+   * Helper to construct dynamic modal title from Kalshi event metadata or local hour
+   * Format example: "Miami, FL — Temperature in Miami today at 4pm EDT"
+   */
+  function getDynamicModalTitle(city, currentMarkets, closeTimeMs) {
+    const cityNameShort = city.name.split(',')[0].trim();
+
+    // 1. Inspect live Kalshi market / event objects
+    if (currentMarkets && currentMarkets.length > 0) {
+      for (const m of currentMarkets) {
+        if (m.event_title && m.event_title.trim().length > 0) {
+          return `${city.name} — ${m.event_title}`;
+        }
+        if (m.title && m.title.toLowerCase().startsWith('temperature in')) {
+          return `${city.name} — ${m.title}`;
+        }
+        if (m.title) {
+          const match = m.title.match(/at\s+(\d+(?::\d+)?\s*(?:am|pm|AM|PM)(?:\s+[A-Za-z]+)?)/i);
+          if (match) {
+            return `${city.name} — Temperature in ${cityNameShort} today at ${match[1].trim()}`;
+          }
+        }
+      }
+    }
+
+    // 2. Synthesize clean title using accurate city timezone
+    try {
+      const closeDate = new Date(closeTimeMs);
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: city.tz,
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true,
+        timeZoneName: 'short'
+      }).formatToParts(closeDate);
+
+      const hour = parts.find(p => p.type === 'hour')?.value || '';
+      const minute = parts.find(p => p.type === 'minute')?.value || '00';
+      const dayPeriod = (parts.find(p => p.type === 'dayPeriod')?.value || '').toLowerCase();
+      const tzName = parts.find(p => p.type === 'timeZoneName')?.value || '';
+
+      const timeStr = (minute === '00' ? `${hour}${dayPeriod}` : `${hour}:${minute}${dayPeriod}`) + (tzName ? ` ${tzName}` : '');
+      return `${city.name} — Temperature in ${cityNameShort} today at ${timeStr}`;
+    } catch (e) {
+      return `${city.name} — Temperature in ${cityNameShort}`;
+    }
+  }
+
+  /**
    * Render all 6 Cities in 3x2 Grid
    */
   function renderDashboard() {
@@ -611,15 +683,23 @@ const KalshiAgent = (() => {
       const statsT = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
       const statsT1 = getEnsembleStatsForHour(city.id, new Date(nextCloseMs));
 
-      // Process Strikes for Current Hour (T)
+      // Process Strikes for Current Hour (T), sorted by highest edge (YES or NO)
       const currentStrikes = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
         evaluateMarketMetrics(city, m, currentCloseMs)
-      ).filter(m => m.isRational).sort((a, b) => a.strike - b.strike);
+      ).filter(m => m.isRational).sort((a, b) => {
+        const edgeA = Math.max(a.edgeYes, a.edgeNo);
+        const edgeB = Math.max(b.edgeYes, b.edgeNo);
+        return edgeB - edgeA;
+      });
 
-      // Process Strikes for Next Hour (T+1) Pre-Market
+      // Process Strikes for Next Hour (T+1) Pre-Market, sorted by highest edge (YES or NO)
       const nextStrikes = (cityFeed ? cityFeed.nextMarkets : []).map(m =>
         evaluateMarketMetrics(city, m, nextCloseMs)
-      ).filter(m => m.isRational).sort((a, b) => a.strike - b.strike);
+      ).filter(m => m.isRational).sort((a, b) => {
+        const edgeA = Math.max(a.edgeYes, a.edgeNo);
+        const edgeB = Math.max(b.edgeYes, b.edgeNo);
+        return edgeB - edgeA;
+      });
 
       // Pre-Market Hot Entry Detection:
       // "Jika ditemukan mispricing (Edge > 15%), nyalakan indikator visual menyolok: ⚡ PRE-MARKET HOT ENTRY"
@@ -694,7 +774,7 @@ const KalshiAgent = (() => {
                   <th>Strike</th>
                   <th>Ask</th>
                   <th>Prob</th>
-                  <th>Edge YES</th>
+                  <th>Best Edge</th>
                 </tr>
               </thead>
               <tbody>
@@ -738,7 +818,7 @@ const KalshiAgent = (() => {
                   <th>Strike</th>
                   <th>Ask</th>
                   <th>Prob</th>
-                  <th>Edge YES</th>
+                  <th>Best Edge</th>
                 </tr>
               </thead>
               <tbody>
@@ -770,8 +850,11 @@ const KalshiAgent = (() => {
     }
 
     return strikes.map(s => {
-      const edgePct = Math.round(s.edgeYes * 100);
-      const probPct = Math.round(s.modelProb * 100);
+      const bestSide = s.edgeNo > s.edgeYes ? 'NO' : 'YES';
+      const maxEdge = Math.max(s.edgeYes, s.edgeNo);
+      const edgePct = Math.round(maxEdge * 100);
+      const probPct = Math.round((bestSide === 'NO' ? (1 - s.modelProb) : s.modelProb) * 100);
+      const askCents = bestSide === 'NO' ? s.noAskCents : s.yesAskCents;
       const isPositive = edgePct > 0;
       const isLargePositive = edgePct >= 15;
 
@@ -786,11 +869,11 @@ const KalshiAgent = (() => {
             >${s.strike}°F
             ${s.isCrossedReality ? '<span title="Live Station Temp Exceeded Strike (100% Reality Lock)">🔒</span>' : ''}
           </td>
-          <td>${s.yesAskCents > 0 ? `${s.yesAskCents}¢` : '--'}</td>
+          <td>${askCents > 0 ? `${askCents}¢` : '--'}</td>
           <td>${probPct}%</td>
           <td>
             <span class="badge-edge ${edgeBadgeClass}">
-              ${edgePct >= 0 ? `+${edgePct}%` : `${edgePct}%`}
+              ${edgePct >= 0 ? `+${edgePct}%` : `${edgePct}%`} ${bestSide}
             </span>
           </td>
         </tr>
@@ -816,9 +899,12 @@ const KalshiAgent = (() => {
     const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
     const risk = getSettlementRisk(currentCloseMs);
 
-    // Update Header
+    // Update Header: Dynamic Kalshi Event Title
+    const modalCityNameEl = document.getElementById('modalCityName');
+    if (modalCityNameEl) {
+      modalCityNameEl.textContent = getDynamicModalTitle(city, cityFeed ? cityFeed.currentMarkets : [], currentCloseMs);
+    }
     document.getElementById('modalStationBadge').textContent = city.icao;
-    document.getElementById('modalCityName').textContent = city.name;
     document.getElementById('modalSeriesTicker').textContent = city.seriesTicker;
 
     const modalHourEl = document.getElementById('modalMarketHour');
@@ -834,12 +920,17 @@ const KalshiAgent = (() => {
     document.getElementById('modalMetarTemp').textContent = metar.tempF !== null ? `${metar.tempF}°F` : '--°F';
     document.getElementById('modalModelMean').textContent = `${stats.mean}°F`;
 
-    // Process Strike List
+    // Process Strike List: Auto-sort by highest edge descending (YES or NO)
     const markets = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
       evaluateMarketMetrics(city, m, currentCloseMs)
-    ).filter(m => m.isRational).sort((a, b) => a.strike - b.strike);
+    ).filter(m => m.isRational).sort((a, b) => {
+      const edgeA = Math.max(a.edgeYes, a.edgeNo);
+      const edgeB = Math.max(b.edgeYes, b.edgeNo);
+      return edgeB - edgeA;
+    });
 
-    const activeStrikeObj = markets.find(m => Math.abs(m.edgeYes) >= 0.05) || markets[0] || {
+    // Default to the top edge strike (markets[0]), or user selected strike
+    const activeStrikeObj = (state.selectedStrikeTicker && markets.find(m => m.ticker === state.selectedStrikeTicker)) || markets[0] || {
       strike: Math.round(stats.mean),
       ticker: `${city.seriesTicker}-T${stats.mean}`
     };
@@ -877,30 +968,38 @@ const KalshiAgent = (() => {
       return;
     }
 
-    tbody.innerHTML = markets.map(m => {
+    tbody.innerHTML = markets.map((m, idx) => {
       const isSelected = selectedStrike && selectedStrike.ticker === m.ticker;
+      const isTopEdge = idx === 0;
       const edgeYesPct = Math.round(m.edgeYes * 100);
       const edgeNoPct = Math.round(m.edgeNo * 100);
       const probPct = Math.round(m.modelProb * 100);
 
+      const rowClass = [
+        isSelected ? 'strike-selected' : '',
+        isTopEdge ? 'strike-best-edge' : ''
+      ].filter(Boolean).join(' ');
+
       return `
-        <tr style="cursor:pointer; ${isSelected ? 'background:var(--bg-hover); font-weight:bold;' : ''}"
+        <tr class="${rowClass}"
+            style="cursor:pointer;"
             onclick="KalshiAgent.selectStrikeInModal('${m.ticker}')">
           <td class="${m.isCrossedReality ? 'strike-crossed' : ''}">
             >${m.strike}°F ${m.isCrossedReality ? '🔒' : ''}
+            ${isTopEdge ? '<span class="badge-best-edge">★ TOP EDGE</span>' : ''}
           </td>
           <td>${m.yesBidCents > 0 ? `${m.yesBidCents}¢` : '--'}</td>
           <td>${m.yesAskCents > 0 ? `${m.yesAskCents}¢` : '--'}</td>
           <td style="color:var(--kalshi-cyan);">${probPct}%</td>
-          <td style="color:${edgeYesPct >= 0 ? 'var(--color-yes)' : 'var(--color-no)'};">
+          <td style="color:${edgeYesPct >= 0 ? 'var(--color-yes)' : 'var(--color-no)'}; font-weight:${edgeYesPct >= 15 ? '800' : '600'};">
             ${edgeYesPct >= 0 ? `+${edgeYesPct}%` : `${edgeYesPct}%`}
           </td>
-          <td style="color:${edgeNoPct >= 0 ? 'var(--color-yes)' : 'var(--color-no)'};">
+          <td style="color:${edgeNoPct >= 0 ? 'var(--color-yes)' : 'var(--color-no)'}; font-weight:${edgeNoPct >= 15 ? '800' : '600'};">
             ${edgeNoPct >= 0 ? `+${edgeNoPct}%` : `${edgeNoPct}%`}
           </td>
           <td>
-            <button style="background:var(--bg-panel); border:1px solid var(--border-subtle); color:var(--kalshi-cyan); font-family:var(--font-mono); font-size:9px; padding:2px 6px; border-radius:3px; cursor:pointer;">
-              ${isSelected ? 'ACTIVE' : 'SELECT'}
+            <button class="strike-action-btn ${isTopEdge ? 'btn-best' : ''}">
+              ${isSelected ? 'ACTIVE' : (isTopEdge ? 'TRADE BEST' : 'SELECT')}
             </button>
           </td>
         </tr>
@@ -919,7 +1018,11 @@ const KalshiAgent = (() => {
 
     const markets = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
       evaluateMarketMetrics(city, m, currentCloseMs)
-    );
+    ).filter(m => m.isRational).sort((a, b) => {
+      const edgeA = Math.max(a.edgeYes, a.edgeNo);
+      const edgeB = Math.max(b.edgeYes, b.edgeNo);
+      return edgeB - edgeA;
+    });
 
     const selected = markets.find(m => m.ticker === ticker);
     if (!selected) return;
@@ -976,24 +1079,40 @@ const KalshiAgent = (() => {
 
     const edgeYes = selectedStrike.edgeYes;
     const edgeNo = selectedStrike.edgeNo;
-    const probPct = Math.round(selectedStrike.modelProb * 100);
+    const probYesPct = Math.round(selectedStrike.modelProb * 100);
+    const probNoPct = 100 - probYesPct;
 
     let recSide = 'NEUTRAL';
-    let maxEdge = Math.max(edgeYes, edgeNo);
+    let targetSide = 'YES';
     let targetAsk = selectedStrike.yesAskCents;
+    let chosenEdge = edgeYes;
+    let chosenProb = probYesPct;
+    let chosenKelly = selectedStrike.halfKellyYes;
 
-    if (edgeYes >= 0.10) {
-      recSide = 'STRONG BUY YES';
-      targetAsk = selectedStrike.yesAskCents;
-    } else if (edgeNo >= 0.10) {
-      recSide = 'STRONG BUY NO';
+    // Dual-Side Edge Evaluator (YES & NO)
+    // If EDGE_NO > +15%, recommendation changes to "STRONG BUY NO @ {noAsk}¢"
+    if (edgeNo > edgeYes) {
+      if (edgeNo >= 0.15) {
+        recSide = 'STRONG BUY NO';
+      } else if (edgeNo >= 0.05) {
+        recSide = 'BUY NO';
+      }
+      targetSide = 'NO';
       targetAsk = selectedStrike.noAskCents;
-    } else if (edgeYes >= 0.05) {
-      recSide = 'BUY YES';
+      chosenEdge = edgeNo;
+      chosenProb = probNoPct;
+      chosenKelly = selectedStrike.halfKellyNo;
+    } else {
+      if (edgeYes >= 0.15) {
+        recSide = 'STRONG BUY YES';
+      } else if (edgeYes >= 0.05) {
+        recSide = 'BUY YES';
+      }
+      targetSide = 'YES';
       targetAsk = selectedStrike.yesAskCents;
-    } else if (edgeNo >= 0.05) {
-      recSide = 'BUY NO';
-      targetAsk = selectedStrike.noAskCents;
+      chosenEdge = edgeYes;
+      chosenProb = probYesPct;
+      chosenKelly = selectedStrike.halfKellyYes;
     }
 
     banner.className = 'ticket-recommendation-banner';
@@ -1005,12 +1124,17 @@ const KalshiAgent = (() => {
       banner.classList.add('neutral');
     }
 
-    recText.textContent = `${recSide} @ ${targetAsk}¢`;
-    recEdge.textContent = `Edge: ${maxEdge >= 0 ? '+' : ''}${Math.round(maxEdge * 100)}%`;
+    if (recSide === 'NEUTRAL') {
+      recText.textContent = 'NO EDGE / NEUTRAL';
+      recEdge.textContent = `${chosenEdge >= 0 ? '+' : ''}${Math.round(chosenEdge * 100)}%`;
+    } else {
+      recText.textContent = `${recSide} @ ${targetAsk}¢`;
+      recEdge.textContent = `Edge: +${Math.round(chosenEdge * 100)}%`;
+    }
 
-    askPriceEl.textContent = `${targetAsk}¢`;
-    modelProbEl.textContent = `${probPct}%`;
-    kellySizeEl.textContent = `${(selectedStrike.halfKelly * 100).toFixed(1)}%`;
+    askPriceEl.textContent = `${targetAsk}¢ (${targetSide})`;
+    modelProbEl.textContent = `${chosenProb}% (${targetSide})`;
+    kellySizeEl.textContent = `${(chosenKelly * 100).toFixed(1)}%`;
 
     // Direct link to Kalshi official market
     tradeBtn.href = `https://kalshi.com/markets/${city.seriesTicker.toLowerCase()}`;
@@ -1304,6 +1428,11 @@ const KalshiAgent = (() => {
     const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
     const risk = getSettlementRisk(currentCloseMs);
 
+    const modalCityNameEl = document.getElementById('modalCityName');
+    if (modalCityNameEl) {
+      modalCityNameEl.textContent = getDynamicModalTitle(city, cityFeed ? cityFeed.currentMarkets : [], currentCloseMs);
+    }
+
     const modalHourEl = document.getElementById('modalMarketHour');
     if (modalHourEl) {
       modalHourEl.textContent = formatMarketHour(city, currentCloseMs, 'Current T');
@@ -1317,14 +1446,18 @@ const KalshiAgent = (() => {
 
     const markets = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
       evaluateMarketMetrics(city, m, currentCloseMs)
-    ).filter(m => m.isRational).sort((a, b) => a.strike - b.strike);
+    ).filter(m => m.isRational).sort((a, b) => {
+      const edgeA = Math.max(a.edgeYes, a.edgeNo);
+      const edgeB = Math.max(b.edgeYes, b.edgeNo);
+      return edgeB - edgeA;
+    });
 
     let activeStrikeObj = null;
     if (state.selectedStrikeTicker) {
       activeStrikeObj = markets.find(m => m.ticker === state.selectedStrikeTicker);
     }
     if (!activeStrikeObj) {
-      activeStrikeObj = markets.find(m => Math.abs(m.edgeYes) >= 0.05) || markets[0];
+      activeStrikeObj = markets[0];
       if (activeStrikeObj) state.selectedStrikeTicker = activeStrikeObj.ticker;
     }
 
