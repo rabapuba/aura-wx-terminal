@@ -44,9 +44,9 @@
           <span class="status-dot active" id="dotKalshi"></span>
           <span>KALSHI CLOB: <b id="statusKalshi" style="color:var(--text-main);">SYNCING</b></span>
         </div>
-        <div class="telemetry-item" title="Aviation Weather METAR/ASOS Feed">
-          <span class="status-dot active" id="dotMetar"></span>
-          <span>METAR GROUND TRUTH: <b id="statusMetar" style="color:var(--text-main);">ONLINE</b></span>
+        <div class="telemetry-item" title="Official Kalshi Settlement Source: Synoptic Data PBC & NWS ASOS">
+          <span class="status-dot active" id="dotSynoptic"></span>
+          <span>SYNOPTIC SETTLEMENT: <b id="statusSynoptic" style="color:var(--text-main);">ONLINE</b></span>
         </div>
         <div class="telemetry-item" title="Google WeatherNext 3 AI Ensemble">
           <span class="status-dot active" id="dotWn"></span>
@@ -116,7 +116,7 @@
               <canvas id="distributionChartCanvas"></canvas>
             </div>
             <div style="display:flex; justify-content:space-between; font-size:9.5px; font-family:var(--font-mono); color:var(--text-dim);">
-              <span>🔵 METAR Reading: <b id="modalMetarTemp" style="color:#38bdf8;">--°F</b></span>
+              <span>🔵 Synoptic Actual: <b id="modalSynopticTemp" style="color:#38bdf8;">--°F</b></span>
               <span>🟣 Ensemble Mean: <b id="modalModelMean" style="color:#a855f7;">--°F</b></span>
               <span>⚡ Active Strike: <b id="modalActiveStrike" style="color:var(--text-main);">--°F</b></span>
             </div>
@@ -125,7 +125,7 @@
           <div class="modal-section">
             <div class="section-title">
               <span>Active Kalshi Strikes & Edge Matrix</span>
-              <span style="font-size:9px; color:var(--text-dim);">Formula: Dual-Side Edge = P_model - Ask (YES / NO)</span>
+              <span style="font-size:9px; color:var(--kalshi-cyan);" id="modalWeightNotice">Dynamic Weight: Auto (Time-Decay)</span>
             </div>
             <div style="max-height: 170px; overflow-y:auto;">
               <table class="micro-strike-table" id="modalStrikesTable">
@@ -190,7 +190,7 @@
                 <div class="ticket-stat-val" id="ticketAskPrice">--¢</div>
               </div>
               <div class="ticket-stat-box">
-                <div class="ticket-stat-label">Model Prob</div>
+                <div class="ticket-stat-label">Model Prob (<span id="ticketWeightMode">AI</span>)</div>
                 <div class="ticket-stat-val" id="ticketModelProb">--%</div>
               </div>
               <div class="ticket-stat-box">

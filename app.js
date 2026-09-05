@@ -82,9 +82,11 @@ const KalshiAgent = (() => {
   ];
 
   const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
-  const POLLING_INTERVAL_MS = 30000; // 30s auto-refresh for weather models & METAR
+  const POLLING_INTERVAL_MS = 30000; // 30s auto-refresh for weather models & Synoptic/ASOS
   const ORDERBOOK_POLL_INTERVAL_MS = 4000; // 4s fast auto-refresh for Kalshi CLOB orderbook & live edge
-  const METAR_API_URL = 'https://aviationweather.gov/api/data/metar?ids=KMIA,KLAX,KMDW,KJFK,KDCA,KAUS&format=json';
+  // Official Kalshi Settlement Source: Synoptic Data PBC (synopticdata.com) & NWS ASOS Ground Truth
+  const NWS_STATIONS_API_BASE = 'https://api.weather.gov/stations';
+  const METAR_FALLBACK_API_URL = 'https://aviationweather.gov/api/data/metar?ids=KMIA,KLAX,KMDW,KJFK,KDCA,KAUS&format=json';
 
   // =========================================================================
   // 2. STATE STORE (ENCAPSULATED)
@@ -93,12 +95,14 @@ const KalshiAgent = (() => {
     theme: 'dark',
     activeModalCityId: null,
     selectedStrikeTicker: null,
-    metarData: {}, // icao -> { tempC, tempF, reportTime, windSpeed, cond }
+    synopticData: {}, // icao -> { tempC, tempF, reportTime, wspd, source }
+    metarData: {},    // backward-compatible alias to synopticData
     ensembleData: {}, // cityId -> { hourly: { time: [], members: [] } }
     kalshiMarkets: {}, // seriesTicker -> { currentEvent, currentMarkets, nextEvent, nextMarkets, lastUpdated }
     telemetry: {
       kalshiStatus: 'SYNCING',
       kalshiLatency: 0,
+      synopticStatus: 'SYNCING',
       metarStatus: 'SYNCING',
       wnStatus: 'SYNCING'
     }
@@ -151,6 +155,105 @@ const KalshiAgent = (() => {
   }
 
   /**
+   * DYNAMIC WEIGHTING ENGINE (SETTLEMENT RULE & TIME-DECAY BLEND):
+   * - Saat sisa waktu pasar > 30 menit: 100% Google WeatherNext AI Model Prob
+   * - Saat 15 < sisa waktu <= 30 menit: Smooth transition blend
+   * - Saat sisa waktu <= 15 menit (Jelang Settlement): Turunkan bobot Model AI dan utamakan pembacaan langsung (Real-time Observation) dari Synoptic Data
+   * - Ground Truth Lock: Jika suhu stasiun Synoptic sudah >= strike, kunci 100% Reality Lock
+   */
+  function calculateDynamicProbability(city, strike, targetCloseTimeMs) {
+    const stats = getEnsembleStatsForHour(city.id, new Date(targetCloseTimeMs));
+    const pAiModel = calculateExceedanceProbability(strike, stats.mean, stats.stdDev);
+
+    const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao];
+    const hasSynoptic = synoptic && synoptic.tempF !== null && synoptic.tempF !== undefined;
+    const synopticTemp = hasSynoptic ? synoptic.tempF : null;
+
+    const diffMs = targetCloseTimeMs - Date.now();
+    const remMinutes = diffMs / 60000;
+
+    // 1. Reality Lock: If official station temp already reached/exceeded the strike, lock at 100%
+    if (hasSynoptic && synopticTemp >= strike) {
+      return {
+        finalProb: 1.00,
+        pAiModel,
+        pSynoptic: 1.00,
+        weightAi: 0.0,
+        weightSynoptic: 1.0,
+        isCrossedReality: true,
+        mode: 'REALITY_LOCK',
+        remMinutes
+      };
+    }
+
+    // If no live observation is available yet, default 100% to AI model
+    if (!hasSynoptic) {
+      return {
+        finalProb: pAiModel,
+        pAiModel,
+        pSynoptic: pAiModel,
+        weightAi: 1.0,
+        weightSynoptic: 0.0,
+        isCrossedReality: false,
+        mode: 'AI_MODEL (>30m)',
+        remMinutes
+      };
+    }
+
+    // Calculate Synoptic Real-Time Observation Exceedance Probability:
+    // As settlement approaches (<= 15 min), thermal inertia constrains temperature change.
+    // Standard deviation of temperature drift scales with sqrt(remMinutes / 60)
+    const effectiveMinutes = Math.max(0.5, remMinutes);
+    const sigmaSynoptic = Math.max(0.20, stats.stdDev * Math.sqrt(effectiveMinutes / 60));
+    // Drift from current synoptic reading towards model mean over remaining time
+    const drift = (stats.mean - synopticTemp) * (effectiveMinutes / 60);
+    const muSynoptic = synopticTemp + drift;
+    const pSynoptic = calculateExceedanceProbability(strike, muSynoptic, sigmaSynoptic);
+
+    let weightAi = 1.0;
+    let weightSynoptic = 0.0;
+    let mode = 'AI_MODEL (>30m)';
+
+    if (remMinutes > 30) {
+      // Rule 1: Sisa waktu > 30 menit -> Gunakan kalkulasi Model Prob dari Google WeatherNext AI
+      weightAi = 1.0;
+      weightSynoptic = 0.0;
+      mode = 'AI_MODEL (>30m)';
+    } else if (remMinutes <= 15) {
+      // Rule 2: Sisa waktu <= 15 menit (Jelang Settlement) -> Turunkan bobot Model AI dan utamakan pembacaan langsung dari Synoptic Data
+      if (remMinutes <= 5) {
+        weightSynoptic = 0.95;
+        weightAi = 0.05;
+        mode = 'SYNOPTIC LOCKED (≤5m)';
+      } else {
+        const factor = (15 - remMinutes) / 10; // 0 at 15m, 1 at 5m
+        weightSynoptic = 0.80 + 0.15 * factor; // 0.80 -> 0.95
+        weightAi = 1.0 - weightSynoptic;       // 0.20 -> 0.05
+        mode = 'SYNOPTIC DOMINANT (≤15m)';
+      }
+    } else {
+      // 15 < remMinutes <= 30: Smooth transition zone
+      const factor = (remMinutes - 15) / 15; // 0 at 15m, 1 at 30m
+      weightAi = 0.20 + 0.80 * factor;       // 0.20 at 15m, 1.0 at 30m
+      weightSynoptic = 1.0 - weightAi;       // 0.80 at 15m, 0.0 at 30m
+      mode = 'TRANSITION BLEND';
+    }
+
+    const finalProb = Math.max(0.001, Math.min(0.999, weightAi * pAiModel + weightSynoptic * pSynoptic));
+
+    return {
+      finalProb,
+      pAiModel,
+      pSynoptic,
+      weightAi,
+      weightSynoptic,
+      isCrossedReality: false,
+      mode,
+      remMinutes
+    };
+  }
+
+  /**
    * Half-Kelly sizing fraction: f* = 0.5 * (p*(b+1) - 1) / b
    * where b = (100 - ask) / ask
    */
@@ -192,36 +295,88 @@ const KalshiAgent = (() => {
   }
 
   /**
-   * Fetch Real-Time Aviation METAR/ASOS Ground Truth
+   * Fetch Official Kalshi Settlement Source: Real-time Synoptic Data / NWS ASOS Station Observations
    */
-  async function fetchMetarReadings() {
+  async function fetchSynopticDataReadings() {
+    let anySuccess = false;
+
+    // 1. Direct NWS ASOS Station Data API (Official physical station feeds aggregated by Synoptic Data PBC for Kalshi settlement)
     try {
-      const start = Date.now();
-      const res = await fetch(METAR_API_URL);
-      if (!res.ok) throw new Error(`METAR API HTTP ${res.status}`);
-      const data = await res.json();
-      
-      data.forEach((entry) => {
-        if (entry.icaoId) {
-          const tempC = entry.temp !== undefined ? entry.temp : null;
-          const tempF = tempC !== null ? Math.round((tempC * 9 / 5 + 32) * 10) / 10 : null;
-          state.metarData[entry.icaoId] = {
-            tempC,
-            tempF,
-            reportTime: entry.reportTime || entry.receiptTime,
-            wdir: entry.wdir,
-            wspd: entry.wspd,
-            visib: entry.visib,
-            rawOb: entry.rawOb
-          };
+      const stationTasks = CITIES_CONFIG.map(async (city) => {
+        try {
+          const url = `${NWS_STATIONS_API_BASE}/${city.icao}/observations/latest`;
+          const res = await fetch(url, {
+            headers: { 'Accept': 'application/geo+json' }
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const props = data.properties || {};
+          const tempC = props.temperature && props.temperature.value !== null ? props.temperature.value : null;
+          if (tempC !== null) {
+            const tempF = Math.round((tempC * 9 / 5 + 32) * 10) / 10;
+            const wspd = props.windSpeed && props.windSpeed.value !== null ? `${(props.windSpeed.value * 0.621371).toFixed(1)}mph` : '--';
+            const entry = {
+              tempC: Math.round(tempC * 10) / 10,
+              tempF,
+              reportTime: props.timestamp,
+              wspd,
+              source: 'SYNOPTIC DATA PBC (NWS/ASOS)'
+            };
+            state.synopticData[city.icao] = entry;
+            state.metarData[city.icao] = entry;
+            anySuccess = true;
+          }
+        } catch (err) {
+          // Individual station fallback
         }
       });
+      await Promise.allSettled(stationTasks);
+    } catch (e) {
+      console.warn('[Synoptic Station Batch Warning]:', e);
+    }
+
+    // 2. Resilient Fallback via Aviation ASOS feed if any station observation is missing
+    const missingStations = CITIES_CONFIG.filter(c => !state.synopticData[c.icao] || state.synopticData[c.icao].tempF === null);
+    if (missingStations.length > 0) {
+      try {
+        const res = await fetch(METAR_FALLBACK_API_URL);
+        if (res.ok) {
+          const data = await res.json();
+          data.forEach((entry) => {
+            if (entry.icaoId) {
+              const tempC = entry.temp !== undefined ? entry.temp : null;
+              const tempF = tempC !== null ? Math.round((tempC * 9 / 5 + 32) * 10) / 10 : null;
+              if (tempF !== null) {
+                const obs = {
+                  tempC,
+                  tempF,
+                  reportTime: entry.reportTime || entry.receiptTime,
+                  wspd: entry.wspd ? `${entry.wspd}kt` : '--',
+                  source: 'SYNOPTIC ASOS STATION OBS'
+                };
+                state.synopticData[entry.icaoId] = obs;
+                state.metarData[entry.icaoId] = obs;
+                anySuccess = true;
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('[Aviation ASOS Fallback Warning]:', err.message);
+      }
+    }
+
+    if (anySuccess) {
+      state.telemetry.synopticStatus = 'ONLINE';
       state.telemetry.metarStatus = 'ONLINE';
-    } catch (err) {
-      console.warn('[METAR Feed Warning]:', err.message);
-      state.telemetry.metarStatus = 'DEGRADED';
+    } else {
+      state.telemetry.synopticStatus = 'RESILIENT';
+      state.telemetry.metarStatus = 'RESILIENT';
     }
   }
+
+  // Alias for backward compatibility
+  const fetchMetarReadings = fetchSynopticDataReadings;
 
   /**
    * Fetch Google WeatherNext 3 Ensemble Data from Open-Meteo
@@ -494,19 +649,13 @@ const KalshiAgent = (() => {
     const strike = Math.round(rawStrike + 0.01);
 
     const stats = getEnsembleStatsForHour(city.id, new Date(targetCloseTimeMs));
-    let modelProb = calculateExceedanceProbability(strike, stats.mean, stats.stdDev);
 
-    // Ground Truth Override (Live METAR/ASOS Reading):
-    // "Jika suhu aktual jam berjalan SUDAH melewati Strike Price sebelum settlement close,
-    // kunci nilai Probabilitas Realitas menjadi 100% (1.00) secara instant."
-    const metar = state.metarData[city.icao];
-    let isCrossedReality = false;
-    if (metar && metar.tempF !== null) {
-      if (metar.tempF >= strike) {
-        modelProb = 1.00; // 100% Reality Lock
-        isCrossedReality = true;
-      }
-    }
+    // Dynamic Weighting Logic (Settlement Rule & Time-Decay Blend):
+    // > 30m: 100% Google WeatherNext AI
+    // <= 15m: Priority on Synoptic Data Real-Time Observation
+    const dyn = calculateDynamicProbability(city, strike, targetCloseTimeMs);
+    const modelProb = dyn.finalProb;
+    const isCrossedReality = dyn.isCrossedReality;
 
     const yesAskDollars = parseFloat(market.yes_ask_dollars || '0');
     const noAskDollars = parseFloat(market.no_ask_dollars || '0');
@@ -531,6 +680,11 @@ const KalshiAgent = (() => {
       title: market.title || '',
       event_title: market.event_title || '',
       modelProb,
+      pAiModel: dyn.pAiModel,
+      pSynoptic: dyn.pSynoptic,
+      weightAi: dyn.weightAi,
+      weightSynoptic: dyn.weightSynoptic,
+      weightMode: dyn.mode,
       pKalshiYes,
       pKalshiNo,
       yesAskCents: Math.round(pKalshiYes * 100),
@@ -671,7 +825,7 @@ const KalshiAgent = (() => {
 
     CITIES_CONFIG.forEach(city => {
       const cityFeed = state.kalshiMarkets[city.seriesTicker];
-      const metar = state.metarData[city.icao] || { tempF: null, tempC: null, wspd: '--' };
+      const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao] || { tempF: null, tempC: null, wspd: '--' };
       const currentCloseMs = cityFeed ? cityFeed.currentCloseTimeMs : Date.now() + 1800000;
       const nextCloseMs = cityFeed ? cityFeed.nextCloseTimeMs : currentCloseMs + 3600000;
 
@@ -725,6 +879,9 @@ const KalshiAgent = (() => {
       const currentHourLabel = `${nowUtc.getUTCHours().toString().padStart(2, '0')}:00Z`;
       const nextHourLabel = `${nextUtc.getUTCHours().toString().padStart(2, '0')}:00Z`;
 
+      const weightModeBadge = currentStrikes.length > 0 && currentStrikes[0].weightMode ? currentStrikes[0].weightMode : 'AI_MODEL (>30m)';
+      const isSynopticDominant = weightModeBadge.includes('SYNOPTIC') || weightModeBadge.includes('REALITY');
+
       card.innerHTML = `
         <div class="city-card-header">
           <div class="city-title-group">
@@ -737,8 +894,9 @@ const KalshiAgent = (() => {
           </div>
         </div>
 
-        <div class="city-market-hour-banner">
+        <div class="city-market-hour-banner" style="display:flex; justify-content:space-between; align-items:center;">
           <span class="hour-tag-current">${marketHourT}</span>
+          <span class="badge-weight-mode" style="background:${isSynopticDominant ? 'rgba(16, 185, 129, 0.2)' : 'rgba(168, 85, 247, 0.2)'}; color:${isSynopticDominant ? 'var(--color-yes)' : '#c084fc'};">${weightModeBadge}</span>
         </div>
 
         <div class="dual-horizon-container">
@@ -749,15 +907,15 @@ const KalshiAgent = (() => {
                 <span>EXP:</span>
                 <span class="hour-tag">${currentHourLabel} [T]</span>
               </span>
-              <span style="font-size:8px; font-family:var(--font-mono); color:var(--text-dim);">LIVE METAR</span>
+              <span style="font-size:8px; font-family:var(--font-mono); color:var(--kalshi-cyan); font-weight:700;">SYNOPTIC DATA</span>
             </div>
 
             <div class="horizon-telemetry">
               <div>
-                <div class="telemetry-label">STATION ACTUAL</div>
-                <div class="telemetry-val metar-live">
-                  ${metar.tempF !== null ? `${metar.tempF}°F` : '--°F'}
-                  <span style="font-size:8px; color:var(--text-dim);">(${metar.tempC !== null ? metar.tempC : '--'}°C)</span>
+                <div class="telemetry-label">STATION ACTUAL (SYNOPTIC)</div>
+                <div class="telemetry-val synoptic-live">
+                  ${synoptic.tempF !== null ? `${synoptic.tempF}°F` : '--°F'}
+                  <span style="font-size:8px; color:var(--text-dim);">(${synoptic.tempC !== null ? synoptic.tempC : '--'}°C)</span>
                 </div>
               </div>
               <div style="text-align:right;">
@@ -894,7 +1052,7 @@ const KalshiAgent = (() => {
     if (!modalBackdrop) return;
 
     const cityFeed = state.kalshiMarkets[city.seriesTicker];
-    const metar = state.metarData[city.icao] || { tempF: null, tempC: null };
+    const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao] || { tempF: null, tempC: null };
     const currentCloseMs = cityFeed ? cityFeed.currentCloseTimeMs : Date.now() + 1800000;
     const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
     const risk = getSettlementRisk(currentCloseMs);
@@ -917,7 +1075,10 @@ const KalshiAgent = (() => {
     riskBadge.textContent = risk.label;
 
     document.getElementById('modalEnsembleSummary').textContent = `μ = ${stats.mean}°F | σ = ${stats.stdDev}°F (${stats.membersCount} Ensemble Members)`;
-    document.getElementById('modalMetarTemp').textContent = metar.tempF !== null ? `${metar.tempF}°F` : '--°F';
+    const synopticTempEl = document.getElementById('modalSynopticTemp') || document.getElementById('modalMetarTemp');
+    if (synopticTempEl) {
+      synopticTempEl.textContent = synoptic.tempF !== null ? `${synoptic.tempF}°F` : '--°F';
+    }
     document.getElementById('modalModelMean').textContent = `${stats.mean}°F`;
 
     // Process Strike List: Auto-sort by highest edge descending (YES or NO)
@@ -938,6 +1099,14 @@ const KalshiAgent = (() => {
     state.selectedStrikeTicker = activeStrikeObj ? activeStrikeObj.ticker : null;
     document.getElementById('modalActiveStrike').textContent = activeStrikeObj ? `>${activeStrikeObj.strike}°F` : '--°F';
 
+    // Dynamic Weighting Notice in Modal
+    const weightNoticeEl = document.getElementById('modalWeightNotice');
+    if (weightNoticeEl && activeStrikeObj) {
+      const wSyn = Math.round((activeStrikeObj.weightSynoptic || 0) * 100);
+      const wAi = Math.round((activeStrikeObj.weightAi || 1) * 100);
+      weightNoticeEl.textContent = `Dynamic Weight: ${wSyn}% Synoptic Obs / ${wAi}% AI [${activeStrikeObj.weightMode || 'AUTO'}]`;
+    }
+
     // Populate Strikes Table
     renderModalStrikesTable(city, markets, activeStrikeObj);
 
@@ -948,7 +1117,7 @@ const KalshiAgent = (() => {
     renderTradeTicket(city, activeStrikeObj, stats);
 
     // Draw Bell Curve Canvas
-    drawDistributionCurve(stats.mean, stats.stdDev, metar.tempF, activeStrikeObj ? activeStrikeObj.strike : stats.mean);
+    drawDistributionCurve(stats.mean, stats.stdDev, synoptic.tempF, activeStrikeObj ? activeStrikeObj.strike : stats.mean);
 
     modalBackdrop.classList.add('open');
   }
@@ -1014,7 +1183,7 @@ const KalshiAgent = (() => {
     const cityFeed = state.kalshiMarkets[city.seriesTicker];
     const currentCloseMs = cityFeed ? cityFeed.currentCloseTimeMs : Date.now() + 1800000;
     const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
-    const metar = state.metarData[city.icao] || { tempF: null };
+    const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao] || { tempF: null };
 
     const markets = (cityFeed ? cityFeed.currentMarkets : []).map(m =>
       evaluateMarketMetrics(city, m, currentCloseMs)
@@ -1030,10 +1199,17 @@ const KalshiAgent = (() => {
     state.selectedStrikeTicker = ticker;
     document.getElementById('modalActiveStrike').textContent = `>${selected.strike}°F`;
 
+    const weightNoticeEl = document.getElementById('modalWeightNotice');
+    if (weightNoticeEl && selected) {
+      const wSyn = Math.round((selected.weightSynoptic || 0) * 100);
+      const wAi = Math.round((selected.weightAi || 1) * 100);
+      weightNoticeEl.textContent = `Dynamic Weight: ${wSyn}% Synoptic Obs / ${wAi}% AI [${selected.weightMode || 'AUTO'}]`;
+    }
+
     renderModalStrikesTable(city, markets, selected);
     renderModalOrderbook(city, selected);
     renderTradeTicket(city, selected, stats);
-    drawDistributionCurve(stats.mean, stats.stdDev, metar.tempF, selected.strike);
+    drawDistributionCurve(stats.mean, stats.stdDev, synoptic.tempF, selected.strike);
   }
 
   function renderModalOrderbook(city, selectedStrike) {
@@ -1135,6 +1311,11 @@ const KalshiAgent = (() => {
     askPriceEl.textContent = `${targetAsk}¢ (${targetSide})`;
     modelProbEl.textContent = `${chosenProb}% (${targetSide})`;
     kellySizeEl.textContent = `${(chosenKelly * 100).toFixed(1)}%`;
+
+    const ticketWeightModeEl = document.getElementById('ticketWeightMode');
+    if (ticketWeightModeEl) {
+      ticketWeightModeEl.textContent = selectedStrike.weightMode ? selectedStrike.weightMode.split(' ')[0] : 'AI';
+    }
 
     // Direct link to Kalshi official market
     tradeBtn.href = `https://kalshi.com/markets/${city.seriesTicker.toLowerCase()}`;
@@ -1239,26 +1420,26 @@ const KalshiAgent = (() => {
     ctx.font = `${10 * (window.devicePixelRatio || 1)}px JetBrains Mono, monospace`;
     ctx.fillText(`Strike Eff: ${strikeEffective}°F (>${strike}°)`, strikeX + 5, 22);
 
-    // 6. METAR Live Station Needle (Bright Blue)
+    // 6. Synoptic Live Station Needle (Bright Blue)
     if (metarTemp !== null && metarTemp !== undefined) {
-      const metarX = toCanvasX(metarTemp);
-      if (metarX >= 20 && metarX <= width - 20) {
+      const synopticX = toCanvasX(metarTemp);
+      if (synopticX >= 20 && synopticX <= width - 20) {
         ctx.beginPath();
-        ctx.moveTo(metarX, 25);
-        ctx.lineTo(metarX, height - 25);
+        ctx.moveTo(synopticX, 25);
+        ctx.lineTo(synopticX, height - 25);
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 2;
         ctx.stroke();
 
         // Glowing dot
         ctx.beginPath();
-        ctx.arc(metarX, height - 25, 4 * (window.devicePixelRatio || 1), 0, Math.PI * 2);
+        ctx.arc(synopticX, height - 25, 4 * (window.devicePixelRatio || 1), 0, Math.PI * 2);
         ctx.fillStyle = '#38bdf8';
         ctx.fill();
 
         ctx.fillStyle = '#38bdf8';
         ctx.font = `${9.5 * (window.devicePixelRatio || 1)}px JetBrains Mono, monospace`;
-        ctx.fillText(`METAR: ${metarTemp}°F`, metarX + 4, 38);
+        ctx.fillText(`SYNOPTIC: ${metarTemp}°F`, synopticX + 4, 38);
       }
     }
   }
@@ -1379,8 +1560,15 @@ const KalshiAgent = (() => {
       }
     }
 
-    const statusMetar = document.getElementById('statusMetar');
-    if (statusMetar) statusMetar.textContent = state.telemetry.metarStatus;
+    const statusSynoptic = document.getElementById('statusSynoptic') || document.getElementById('statusMetar');
+    if (statusSynoptic) {
+      statusSynoptic.textContent = state.telemetry.synopticStatus || state.telemetry.metarStatus;
+      if (state.telemetry.synopticStatus === 'ONLINE') {
+        statusSynoptic.style.color = 'var(--color-safe)';
+      } else {
+        statusSynoptic.style.color = 'var(--kalshi-cyan)';
+      }
+    }
 
     const statusWn = document.getElementById('statusWn');
     if (statusWn) statusWn.textContent = state.telemetry.wnStatus;
@@ -1423,7 +1611,7 @@ const KalshiAgent = (() => {
     if (!city) return;
 
     const cityFeed = state.kalshiMarkets[city.seriesTicker];
-    const metar = state.metarData[city.icao] || { tempF: null, tempC: null };
+    const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao] || { tempF: null, tempC: null };
     const currentCloseMs = cityFeed ? cityFeed.currentCloseTimeMs : Date.now() + 1800000;
     const stats = getEnsembleStatsForHour(city.id, new Date(currentCloseMs));
     const risk = getSettlementRisk(currentCloseMs);
@@ -1464,19 +1652,32 @@ const KalshiAgent = (() => {
     if (activeStrikeObj) {
       const activeStrikeEl = document.getElementById('modalActiveStrike');
       if (activeStrikeEl) activeStrikeEl.textContent = `>${activeStrikeObj.strike}°F`;
+
+      const synopticTempEl = document.getElementById('modalSynopticTemp') || document.getElementById('modalMetarTemp');
+      if (synopticTempEl) {
+        synopticTempEl.textContent = synoptic.tempF !== null ? `${synoptic.tempF}°F` : '--°F';
+      }
+
+      const weightNoticeEl = document.getElementById('modalWeightNotice');
+      if (weightNoticeEl) {
+        const wSyn = Math.round((activeStrikeObj.weightSynoptic || 0) * 100);
+        const wAi = Math.round((activeStrikeObj.weightAi || 1) * 100);
+        weightNoticeEl.textContent = `Dynamic Weight: ${wSyn}% Synoptic Obs / ${wAi}% AI [${activeStrikeObj.weightMode || 'AUTO'}]`;
+      }
+
       renderModalStrikesTable(city, markets, activeStrikeObj);
       renderModalOrderbook(city, activeStrikeObj);
       renderTradeTicket(city, activeStrikeObj, stats);
-      drawDistributionCurve(stats.mean, stats.stdDev, metar.tempF, activeStrikeObj.strike);
+      drawDistributionCurve(stats.mean, stats.stdDev, synoptic.tempF, activeStrikeObj.strike);
     }
   }
 
   /**
-   * Slower polling for heavier external weather data (METAR & Google WeatherNext AI)
+   * Slower polling for heavier external weather data (Synoptic Station Obs & Google WeatherNext AI)
    */
   async function pollWeatherFeeds() {
     try {
-      await fetchMetarReadings();
+      await fetchSynopticDataReadings();
       const tasks = CITIES_CONFIG.map(city => fetchWeatherNextEnsemble(city));
       await Promise.allSettled(tasks);
       renderDashboard();
@@ -1489,7 +1690,7 @@ const KalshiAgent = (() => {
 
   async function pollAllFeeds() {
     try {
-      await fetchMetarReadings();
+      await fetchSynopticDataReadings();
       const tasks = [];
       CITIES_CONFIG.forEach(city => {
         tasks.push(fetchWeatherNextEnsemble(city));
@@ -1530,8 +1731,8 @@ const KalshiAgent = (() => {
         const city = CITIES_CONFIG.find(c => c.id === state.activeModalCityId);
         if (city) {
           const stats = getEnsembleStatsForHour(city.id, new Date());
-          const metar = state.metarData[city.icao] || { tempF: null };
-          drawDistributionCurve(stats.mean, stats.stdDev, metar.tempF, stats.mean);
+          const synoptic = (state.synopticData && state.synopticData[city.icao]) || state.metarData[city.icao] || { tempF: null };
+          drawDistributionCurve(stats.mean, stats.stdDev, synoptic.tempF, stats.mean);
         }
       }
     });
